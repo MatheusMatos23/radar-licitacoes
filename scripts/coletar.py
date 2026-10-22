@@ -37,7 +37,8 @@ MODALIDADES_OK = {"4", "5", "6", "7", "8"}  # concorrência, pregão, dispensa
 
 
 def carregar_config():
-    cfg = {"ufs": ["SP"], "max_editais": 600, "paginas_por_uf": 20,
+    cfg = {"ufs": ["SP"], "max_editais": 600,  # max_editais = limite por estado
+           "paginas_por_uf": 20,
            "meses_historico": 12, "threads": 8, "threads_precos": 3}
     caminho = os.path.join(RAIZ, "config.json")
     if os.path.exists(caminho):
@@ -197,15 +198,16 @@ def main():
     os.makedirs(DADOS, exist_ok=True)
     print("Config:", cfg)
 
-    brutos = []
-    for uf in cfg["ufs"]:
-        brutos.extend(buscar_editais(uf, cfg["paginas_por_uf"]))
+    # O limite vale por estado, para um estado grande não ocupar a coleta inteira
     vistos, unicos = set(), []
-    for e in brutos:
-        if e["numero_controle_pncp"] not in vistos:
-            vistos.add(e["numero_controle_pncp"])
-            unicos.append(e)
-    unicos = unicos[: cfg["max_editais"]]
+    for uf in cfg["ufs"]:
+        do_uf = []
+        for e in buscar_editais(uf, cfg["paginas_por_uf"]):
+            if e["numero_controle_pncp"] not in vistos and len(do_uf) < cfg["max_editais"]:
+                vistos.add(e["numero_controle_pncp"])
+                do_uf.append(e)
+        print(f"  {uf}: {len(do_uf)} editais")
+        unicos.extend(do_uf)
     print(f"Editais a detalhar: {len(unicos)}")
 
     with ThreadPoolExecutor(cfg["threads"]) as ex:
