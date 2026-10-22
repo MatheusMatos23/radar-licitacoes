@@ -7,8 +7,8 @@
   <meta name="description" content="Painel de oportunidades em licitações públicas: editais abertos, histórico de preços do governo e análise de margem para revenda.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="assets/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,500;8..60,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/style.css?v=3">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23163a6b'/%3E%3Ccircle cx='16' cy='16' r='9' fill='none' stroke='%23fff' stroke-width='2.5'/%3E%3Cpath d='M16 16 L22 10' stroke='%23c99a2e' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -23,18 +23,20 @@
     <div class="wrap">
       <div class="brand">
         <div class="brand-mark">
-          <svg viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="11" stroke="#163a6b" stroke-width="2.5"/><circle cx="16" cy="16" r="5" stroke="#163a6b" stroke-width="2" opacity=".5"/><path d="M16 16 L23.5 8.5" stroke="#c99a2e" stroke-width="3" stroke-linecap="round"/></svg>
+          <svg viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="11" stroke="#fff" stroke-width="1.6"/><circle cx="16" cy="16" r="5.5" stroke="#fff" stroke-width="1.2" opacity=".6"/><path d="M16 16 L23.5 8.5" stroke="#d9b45e" stroke-width="2.4"/></svg>
         </div>
         <div>
           <h1>Radar de Licitações</h1>
-          <p>Oportunidades · Preço de referência · Margem de revenda</p>
+          <p>Inteligência de compras públicas para pequenas empresas</p>
         </div>
       </div>
       <nav class="tabs" id="tabs">
         <button data-view="radar" class="active">Oportunidades</button>
         <button data-view="analise">Análise do edital</button>
-        <button data-view="carteira">Minha carteira <span class="badge" id="cartCount">0</span></button>
-        <button data-view="guia">Guia MEI &amp; estratégia</button>
+        <button data-view="casos">Casos reais</button>
+        <button data-view="fornecedores">Fornecedores</button>
+        <button data-view="carteira">Carteira <span class="badge" id="cartCount">0</span></button>
+        <button data-view="guia">Guia</button>
         <button data-view="config">Configurações</button>
       </nav>
     </div>
@@ -45,6 +47,7 @@
 
       <!-- ================= RADAR ================= -->
       <section id="view-radar">
+        <div class="jornada" data-etapa="1"></div>
         <div class="layout">
           <aside class="card filters">
             <div class="card-h"><h3>Filtros</h3><button class="btn sm ghost" id="fReset" style="margin-left:auto">Limpar</button></div>
@@ -127,6 +130,7 @@
 
       <!-- ================= ANÁLISE ================= -->
       <section id="view-analise" class="hidden">
+        <div class="jornada" data-etapa="2"></div>
         <div id="analise"></div>
       </section>
 
@@ -136,6 +140,12 @@
           <button class="btn sm" id="cartCsv" style="margin-left:auto">Exportar CSV</button></div>
         <div class="card" id="carteira"></div>
       </section>
+
+      <!-- ================= CASOS ================= -->
+      <section id="view-casos" class="hidden"></section>
+
+      <!-- ================= FORNECEDORES ================= -->
+      <section id="view-fornecedores" class="hidden"></section>
 
       <!-- ================= GUIA ================= -->
       <section id="view-guia" class="hidden"></section>
@@ -147,6 +157,7 @@
           <div class="card">
             <div class="card-h"><h3>Sua empresa</h3></div>
             <div class="card-b">
+              <div class="field"><label for="cEmpresa">Nome da empresa</label><input type="text" id="cEmpresa" placeholder="usado nos pedidos de cotação"></div>
               <div class="field"><label for="cPorte">Porte</label>
                 <select id="cPorte">
                   <option value="MEI">MEI (limite R$ 81 mil/ano)</option>
@@ -191,9 +202,17 @@
             </div>
           </div>
           <div class="card">
+            <div class="card-h"><h3>Agente de IA para cotação (opcional)</h3></div>
+            <div class="card-b">
+              <p class="small muted" style="margin-top:0">Com uma chave da API Claude, o botão <b>Pesquisar com agente de IA</b> busca preços na web para cada item — marketplaces, atacados, fábricas e distribuidores da região — e registra as cotações com link. Custo típico: alguns centavos de dólar por item, cobrados na sua conta Anthropic. Crie a chave em <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>.</p>
+              <div class="field"><label for="cChave">Chave da API</label><input type="password" id="cChave" autocomplete="off" placeholder="sk-ant-...">
+                <div class="hint">Fica salva só neste navegador e é enviada apenas para api.anthropic.com. Não use em computador compartilhado.</div></div>
+            </div>
+          </div>
+          <div class="card">
             <div class="card-h"><h3>Dados salvos</h3></div>
             <div class="card-b">
-              <p class="small muted" style="margin-top:0">Carteira, custos digitados e configurações ficam no armazenamento deste navegador.</p>
+              <p class="small muted" style="margin-top:0">Carteira, cotações, custos digitados e configurações ficam no armazenamento deste navegador. Faça backup para levar a outro computador.</p>
               <div style="display:flex;gap:8px;flex-wrap:wrap">
                 <button class="btn" id="bkExport">Baixar backup</button>
                 <label class="btn">Restaurar backup<input type="file" id="bkImport" accept="application/json" hidden></label>
@@ -206,9 +225,10 @@
     </div>
   </main>
 
-  <footer>Radar de Licitações · ferramenta de apoio à decisão. Confira sempre o edital, os anexos e o termo de referência antes de enviar proposta.</footer>
+  <footer><div class="wrap"><span><b>Radar de Licitações</b> · ferramenta de apoio à decisão. Confira sempre o edital, os anexos e o termo de referência antes de enviar proposta.</span><span>Fontes: PNCP · Compras.gov.br — dados abertos</span></div></footer>
   <div class="toast" id="toast"></div>
 
-  <script src="assets/app.js"></script>
+  <script src="assets/app.js?v=3"></script>
+  <script src="assets/cotacao.js?v=3"></script>
 </body>
 </html>

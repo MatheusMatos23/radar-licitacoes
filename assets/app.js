@@ -11,7 +11,7 @@ const BENEFICIO = { 1: "Exclusivo ME/EPP", 2: "Subcontratação ME/EPP", 3: "Cot
 const PNCP = "https://pncp.gov.br/api";
 const PRECOS_API = "https://dadosabertos.compras.gov.br/modulo-pesquisa-preco/1_consultarMaterial";
 
-const CFG_PADRAO = { porte: "ME", uf: "SP", base: "", fat: 0, imp: 6, frete: 4, out: 2, marg: 15, dist: 1, proxy: "" };
+const CFG_PADRAO = { empresa: "", chaveIA: "", porte: "ME", uf: "SP", base: "", fat: 0, imp: 6, frete: 4, out: 2, marg: 15, dist: 1, proxy: "" };
 
 /* ---------------- armazenamento seguro ---------------- */
 const store = {
@@ -48,7 +48,7 @@ const nfmt = (v, d = 0) => v == null || isNaN(v) ? "–" : v.toLocaleString("pt-
 const pct = v => v == null || isNaN(v) ? "–" : (v * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + "%";
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const norm = s => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
-const dataBR = s => s ? new Date(s).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" }) : "–";
+const dataBR = s => s ? new Date(/^\d{4}-\d{2}-\d{2}$/.test(s) ? s + "T12:00" : s).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" }) : "–";
 const dataHoraBR = s => s ? new Date(s).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "–";
 const dias = s => s ? (new Date(s) - Date.now()) / 864e5 : null;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -217,10 +217,14 @@ function calcular(it, ed) {
   }
   const unidadeSuspeita = h && teto && (h.med / teto > 3 || h.med / teto < .3);
   const key = ed.id + "#" + it.n;
-  const custo = S.custos[key] > 0 ? +S.custos[key] : null;
+  // Custo digitado manualmente tem prioridade; senão, usa a melhor cotação registrada
+  const melhorCot = typeof Cot !== "undefined" ? Cot.melhor(key, it.q) : null;
+  const custoManual = S.custos[key] > 0 ? +S.custos[key] : null;
+  const custo = custoManual ?? (melhorCot ? Math.round(melhorCot.efetivo * 100) / 100 : null);
   const fator = 1 - T - M;
   const custoMax = equ != null && fator > 0 ? equ * fator : null;
-  const r = { h, teto, agr, equ, con, fonteRef, unidadeSuspeita, key, custo, custoMax, T, M, lance: equ, veredito: "unk" };
+  const compreAte = teto && fator > 0 ? teto * fator : custoMax; // custo máximo admissível, lance no teto
+  const r = { h, teto, agr, equ, con, fonteRef, unidadeSuspeita, key, custo, custoManual, melhorCot, custoMax, compreAte, T, M, lance: equ, veredito: "unk" };
 
   if (custo != null && fator > 0) {
     const pMin = custo / fator;
@@ -242,6 +246,28 @@ function calcular(it, ed) {
     r.receita = r.lance * it.q;
   }
   return r;
+}
+
+/* Alertas por tipo de produto, aprendidos nos estudos de caso: o que pode barrar a revenda antes da margem. */
+const ALERTAS = [
+  [/hospitalar|m[eé]dic|odontol|desfibril|ox[ií]metro|autoclave|esterilizaç|cir[uú]rgic|ortop|seringa|cateter|monitor multiparam/i,
+    "red", "Produto para saúde", "Revender exige AFE da Anvisa, licença sanitária e responsável técnico, além do registro Anvisa do modelo."],
+  [/saneante|desinfetante|cloro|[aá]gua sanit|hipoclorito|detergente|alvejante|inseticida/i,
+    "amber", "Saneante", "O produto precisa de notificação/registro na Anvisa. Peça o número ao fornecedor."],
+  [/saco (de |p\/ )?lixo|saco lixo/i, "amber", "Norma ABNT", "Sacos de lixo costumam exigir a NBR 9191 — peça o laudo ao fabricante."],
+  [/extintor|capacete|luva|bota|[oó]culos de prote|protetor auricular|cinto de seguran|\bEPI\b/i,
+    "amber", "Certificação", "Equipamento de proteção ou segurança: exige CA (Certificado de Aprovação) ou Inmetro."],
+  [/medicament|f[aá]rmaco|comprimido|ampola/i, "red", "Medicamento", "Exige AFE de distribuidora de medicamentos e farmacêutico responsável."],
+  [/aliment|g[eê]nero|carne|hortifr|leite|p[aã]o\b/i, "amber", "Alimento", "Perecível: entrega frequente, refrigeração e licença sanitária podem ser exigidas."],
+  [/instala[cç][aã]o|montagem|treinamento|assist[eê]ncia t[eé]cnica/i, "amber", "Serviço embutido", "O item inclui instalação, montagem ou assistência: considere esse custo e quem vai executar."],
+];
+/* "PCT COM 100", "CX C/ 12", "caixa com 50 unidades" -> 100, 12, 50 */
+function unidadesPorEmbalagem(desc) {
+  const m = desc.match(/(?:pct|pacote|cx|caixa|embalagem|kit|fardo|rolo|bloco)\.?\s*(?:com|c\/|de)\s*(\d{2,5})/i);
+  return m ? +m[1] : null;
+}
+function alertasItem(it) {
+  return ALERTAS.filter(([re]) => re.test(it.d)).map(([, cor, rotulo, dica]) => `<span class="tag ${cor}" title="${esc(dica)}">${rotulo}</span>`).join("");
 }
 
 const VEREDITO = {
@@ -411,11 +437,24 @@ function atualizarKPIs() {
 }
 
 function anel(score) {
-  const c = 2 * Math.PI * 25, cor = score >= 70 ? "#12805c" : score >= 50 ? "#c99a2e" : "#9aa6ba";
-  return `<div class="score" title="Atratividade (0–100): prazo, distância, itens ME/EPP, folga entre teto e preço de mercado, porte">
-    <svg viewBox="0 0 60 60"><circle cx="30" cy="30" r="25" fill="none" stroke="#eef2f7" stroke-width="6"/>
-    <circle cx="30" cy="30" r="25" fill="none" stroke="${cor}" stroke-width="6" stroke-linecap="round" stroke-dasharray="${c * score / 100} ${c}"/></svg>
-    <div class="t"><div>${score}<small>SCORE</small></div></div></div>`;
+  const cor = score >= 70 ? "var(--green)" : score >= 50 ? "var(--gold)" : "#9aa3b1";
+  return `<div class="score" title="Índice de atratividade (0–100): prazo, distância, itens ME/EPP, folga entre teto e preço de mercado, porte">
+    <div class="n">${score}</div><div class="k">índice</div><div class="r"><span style="width:${score}%;background:${cor}"></span></div></div>`;
+}
+
+/* Faixa didática com as 5 etapas do processo de revenda ao governo. */
+const ETAPAS = [
+  ["Encontrar", "editais abertos perto de você"],
+  ["Analisar", "teto, histórico e quantidade"],
+  ["Cotar", "fornecedores sem estoque"],
+  ["Decidir", "lance mínimo e margem"],
+  ["Propor e entregar", "disputa, empenho, entrega"],
+];
+function renderJornadas() {
+  $$(".jornada[data-etapa]").forEach(el => {
+    const atual = +el.dataset.etapa;
+    el.innerHTML = ETAPAS.map(([t, s], i) => `<div class="${i + 1 === atual ? "on" : i + 1 < atual ? "ok" : ""}"><i>ETAPA ${i + 1}</i><b>${t}</b><span>${s}</span></div>`).join("");
+  });
 }
 
 function prazoTag(enc) {
@@ -434,6 +473,7 @@ function cardHTML(ed) {
   if (ed._hist) tags.push(`<span class="tag blue">${ed._hist} com histórico de preço</span>`);
   if (ed._valor && ed._valor > limiteRestante()) tags.push(`<span class="tag red">Acima do limite ${esc(S.cfg.porte)}</span>`);
   if (ed.itens && ed.itens.length && ed.itens.every(i => i.s)) tags.push(`<span class="tag">Orçamento sigiloso</span>`);
+  if (ed.itens?.some(i => ALERTAS[0][0].test(i.d))) tags.push(`<span class="tag red" title="${esc(ALERTAS[0][3])}">Produto para saúde: exige AFE</span>`);
   if (!ed.itens) tags.push(`<span class="tag"><span class="loader" style="width:10px;height:10px"></span> carregando itens</span>`);
   let match = "";
   if (ed._alvo?.length) {
@@ -484,7 +524,7 @@ function acharEdital(id) {
   return S.resultados.find(e => e.id === id) || S.vivoBruto.find(e => e.id === id) || S.base.editais.find(e => e.id === id) || (S.atual?.id === id ? S.atual : null) || doCarteira(id);
 }
 function doCarteira(id) {
-  const c = S.carteira[id];
+  const c = S.carteira[id] || (S.casos || []).find(x => x.edital_id === id)?.edital;
   return c ? { ...c, itens: null } : null;
 }
 
@@ -601,34 +641,36 @@ function renderAnalise() {
       <td><input type="checkbox" class="sel" ${sel ? "checked" : ""} title="Incluir no resumo"></td>
       <td class="num">${it.n}</td>
       <td class="desc"><div class="d" title="Clique para expandir">${esc(it.d)}</div>
-        <div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap">${benef}${it.c ? `<span class="tag">CATMAT ${esc(it.c)}</span>` : ""}${r.unidadeSuspeita ? '<span class="tag amber" title="Histórico muito diferente do teto: confira a unidade (caixa x unidade, pacote, etc.)">confira a unidade</span>' : ""}</div></td>
+        <div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap">${benef}${alertasItem(it)}${it.c ? `<span class="tag">CATMAT ${esc(it.c)}</span>` : ""}${r.unidadeSuspeita ? '<span class="tag amber" title="Histórico muito diferente do teto: confira a unidade (caixa x unidade, pacote, etc.)">confira a unidade</span>' : ""}</div></td>
       <td class="r num">${nfmt(it.q, 2)}<div class="small muted">${esc(it.u)}</div></td>
-      <td class="r num">${r.teto ? brl(r.teto) : '<span class="muted small">sigiloso</span>'}</td>
+      <td class="r num">${r.teto ? brl(r.teto) : '<span class="muted small">sigiloso</span>'}${r.teto && unidadesPorEmbalagem(it.d) ? `<div class="small muted">${brl(r.teto / unidadesPorEmbalagem(it.d), 3)}/un. (emb. ${unidadesPorEmbalagem(it.d)})</div>` : ""}</td>
+      <td class="r num"><b>${r.compreAte ? brl(r.compreAte) : "–"}</b>${r.custo != null && r.compreAte ? `<div class="small" style="color:${r.custo <= r.compreAte ? "var(--green)" : "var(--red)"}">${r.custo <= r.compreAte ? "folga " : "excede "}${pct(Math.abs(r.compreAte - r.custo) / r.compreAte)}</div>` : ""}</td>
       <td>${faixa(r)}<div class="small muted num">${r.h ? `mediana ${brl(r.h.med)} · ${r.h.n} compras` : r.fonteRef === "teto" ? "sem histórico: base no teto" : "sem histórico"}</div></td>
       <td class="r num"><b>${r.lance ? brl(r.lance) : "–"}</b><div class="small muted">${r.chance != null ? "chance ~" + pct(r.chance) : ""}</div></td>
-      <td class="r"><input class="cost num" type="number" min="0" step="0.01" placeholder="${r.custoMax ? "até " + nfmt(r.custoMax, 2) : "R$"}" value="${r.custo ?? ""}"></td>
+      <td class="r"><input class="cost num" type="number" min="0" step="0.01" placeholder="${r.custo != null ? nfmt(r.custo, 2) : r.custoMax ? "até " + nfmt(r.custoMax, 2) : "R$"}" value="${r.custoManual ?? ""}" title="Custo unitário de compra. Vazio = usa a melhor cotação registrada.">
+        ${r.custoManual == null && r.melhorCot ? `<div class="via" ${r.melhorCot.incerto ? 'style="color:var(--amber)" title="Nenhuma cotação confirmada atende à especificação"' : ""}>via cotação${r.melhorCot.incerto ? " (incerta)" : ""}: ${esc(r.melhorCot.forn.slice(0, 22))}</div>${(() => { const alt = Cot.aConfirmar(r.key, it.q); return alt ? `<div class="via" style="color:var(--amber)" title="${esc(alt.forn)}: confirme se atende à especificação">a confirmar: ${brl(alt.efetivo)}</div>` : ""; })()}` : r.custoManual == null ? `<div class="small muted">${Cot.lista(r.key).length ? "cotações sem preço" : "sem cotação"}</div>` : ""}</td>
       <td class="r num">${r.lucro != null ? `<b style="color:${r.lucro >= 0 ? "var(--green)" : "var(--red)"}">${brl(r.lucro, 0)}</b><div class="small muted">${pct(r.margem)}</div>` : "–"}</td>
       <td><span class="verdict ${cls}">${txt}</span></td>
-      <td><button class="btn sm ghost tg" title="Detalhes, histórico e onde comprar">▾</button></td>
+      <td><button class="btn sm tg" title="Cotar fornecedores, ver histórico e estratégia">Cotar ▾</button></td>
     </tr>
-    <tr class="detail hidden" data-detail="${esc(r.key)}"><td colspan="11">${detalheHTML(it, r, ed)}</td></tr>`;
+    <tr class="detail hidden" data-detail="${esc(r.key)}"><td colspan="12">${detalheHTML(it, r, ed)}</td></tr>`;
   }).join("");
 
   // Resumo dos itens marcados
-  let receita = 0, custo = 0, lucro = 0, nSel = 0, semCusto = 0;
+  let receita = 0, receitaTotal = 0, custo = 0, lucro = 0, nSel = 0, semCusto = 0;
   for (const it of ordem) {
     const r = calc.get(it);
     const sel = S.sel[r.key] ?? r.veredito !== "no";
     if (!sel || r.lance == null) continue;
     nSel++;
-    receita += r.receita;
-    if (r.custo != null) { custo += r.custo * it.q; lucro += r.lucro; } else semCusto++;
+    receitaTotal += r.receita;
+    if (r.custo != null) { receita += r.receita; custo += r.custo * it.q; lucro += r.lucro; } else semCusto++;
   }
   const comCusto = nSel - semCusto;
   const margem = receita && comCusto ? lucro / receita : null;
   const v0 = v => comCusto ? brl(v, 0) : "–";
-  const alertaPorte = receita > limiteRestante()
-    ? `<div class="callout" style="margin:12px 16px 0">A receita dos itens marcados (${brl(receita, 0)}) passa do limite anual restante do porte <b>${esc(S.cfg.porte)}</b> (${brl(limiteRestante(), 0)}). Desmarque itens ou avalie migrar de porte.</div>` : "";
+  const alertaPorte = receitaTotal > limiteRestante()
+    ? `<div class="callout" style="margin:12px 16px 0">A receita potencial dos itens marcados (${brl(receitaTotal, 0)}) passa do limite anual restante do porte <b>${esc(S.cfg.porte)}</b> (${brl(limiteRestante(), 0)}). Desmarque itens ou avalie migrar de porte.</div>` : "";
 
   box.innerHTML = `
     <div style="margin-bottom:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -640,7 +682,7 @@ function renderAnalise() {
     <div class="card" style="margin-bottom:16px">
       <div class="an-head">
         <div>
-          <div class="tags" style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap"><span class="tag blue">${esc(ed.modalidade)}</span>${prazoTag(ed.encerramento)}<span class="tag">${esc(ed.esfera || "")}</span></div>
+          <div class="tags" style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap"><span class="tag blue">${esc(ed.modalidade)}</span>${prazoTag(ed.encerramento)}${/registro de pre[cç]o|SRP/i.test(ed.objeto || "") ? '<span class="tag amber" title="Registro de preços: o órgão compra aos poucos, sem garantia do total. Frete por entrega pesa mais.">Registro de preços (SRP)</span>' : ""}<span class="tag">${esc(ed.esfera || "")}</span></div>
           <h2>${esc(ed.objeto || ed.titulo)}</h2>
           <div class="muted">${esc(ed.orgao)}${ed.unidade && ed.unidade !== ed.orgao ? " · " + esc(ed.unidade) : ""}</div>
         </div>
@@ -658,13 +700,14 @@ function renderAnalise() {
     <div class="card" style="margin-bottom:16px">
       <div class="card-h"><h3>Resultado se você ganhar os itens marcados</h3><span class="muted small" style="margin-left:auto">${nSel} item(ns) marcados${semCusto ? ` · ${semCusto} sem custo (lucro considera só itens com custo)` : ""}</span></div>
       <div class="summary">
-        <div><div class="l">Receita (lances)</div><div class="v num">${brl(receita, 0)}</div></div>
+        <div><div class="l">Receita (itens com custo)</div><div class="v num">${v0(receita)}</div><div class="small muted">potencial de todos os marcados: ${brl(receitaTotal, 0)}</div></div>
         <div><div class="l">Custo de compra</div><div class="v num">${v0(custo)}</div></div>
         <div><div class="l">Impostos + frete + outros</div><div class="v num">${v0(receita - custo - lucro)}</div></div>
         <div><div class="l">Lucro líquido</div><div class="v num ${!comCusto ? "" : lucro >= 0 ? "pos" : "neg"}">${v0(lucro)}</div></div>
         <div><div class="l">Margem</div><div class="v num ${margem == null ? "" : margem >= S.cfg.marg / 100 ? "pos" : "neg"}">${pct(margem)}</div></div>
       </div>
       ${alertaPorte}
+      ${dias(ed.encerramento) != null && dias(ed.encerramento) < 7 ? `<div class="callout" style="margin:12px 16px 14px">Prazo curto: faltam ${Math.max(0, Math.floor(dias(ed.encerramento)))} dia(s). Para revenda sem estoque, só entre se já tiver cotação firme por escrito.</div>` : ""}
     </div>
 
     <div class="card">
@@ -679,8 +722,8 @@ function renderAnalise() {
       </div>
       <div class="table-wrap">
         <table class="items">
-          <thead><tr><th title="Participar">✓</th><th>#</th><th>Item</th><th class="r">Qtd</th><th class="r">Teto unit.</th><th>Preços pagos pelo governo</th><th class="r">Lance sugerido</th><th class="r">Seu custo unit.</th><th class="r">Lucro</th><th>Veredito</th><th></th></tr></thead>
-          <tbody>${linhas || `<tr><td colspan="11" class="empty">Este edital não tem itens de material.</td></tr>`}</tbody>
+          <thead><tr><th title="Participar">✓</th><th>#</th><th>Item</th><th class="r">Qtd</th><th class="r">Teto unit.</th><th class="r" title="Custo máximo de compra para manter a margem mínima, dando lance no teto">Compre até</th><th>Preços pagos pelo governo</th><th class="r">Lance sugerido</th><th class="r">Seu custo unit.</th><th class="r">Lucro</th><th>Veredito</th><th></th></tr></thead>
+          <tbody>${linhas || `<tr><td colspan="12" class="empty">Este edital não tem itens de material.</td></tr>`}</tbody>
         </table>
       </div>
       <div class="legend">
@@ -696,27 +739,32 @@ function renderAnalise() {
 
 function detalheHTML(it, r, ed) {
   const h = r.h;
+  const nCot = Cot.lista(r.key).length;
   const histTab = h ? `<table class="hist"><thead><tr><th>Data</th><th>Órgão</th><th>UF</th><th class="r">Qtd</th><th class="r">Preço unit.</th><th>Fornecedor / marca</th></tr></thead><tbody>
       ${(h.ult || []).map(u => `<tr><td>${dataBR(u.data)}</td><td>${esc((u.orgao || "").slice(0, 38))}</td><td>${esc(u.uf)}</td><td class="r num">${nfmt(u.qtd)}</td><td class="r num"><b>${brl(u.preco)}</b></td><td>${esc((u.forn || "").slice(0, 34))}${u.marca ? " · <span class='muted'>" + esc(u.marca) + "</span>" : ""}</td></tr>`).join("")}
     </tbody></table>
-    <div class="small muted" style="margin-top:6px">Faixa paga em ${h.n} compras (12 meses): mín. ${brl(h.min)} · 25% ${brl(h.p25)} · mediana ${brl(h.med)} · 75% ${brl(h.p75)} · máx. ${brl(h.max)}</div>`
-    : `<p class="small muted">${it.c ? (S.cfg.proxy ? "Sem compras registradas para este código nos últimos 12 meses." : "Este item ainda não está na base de preços do robô. Configure o proxy em Configurações para consultar ao vivo, ou aguarde a próxima coleta.") : "Item sem código CATMAT — o governo não tem série de preços padronizada. Use as buscas de fornecedor ao lado."}</p>`;
+    <p class="small muted">Faixa paga em ${h.n} compras (12 meses): mín. ${brl(h.min)} · 25% ${brl(h.p25)} · mediana ${brl(h.med)} · 75% ${brl(h.p75)} · máx. ${brl(h.max)}. Estes são preços que <b>venceram</b> outras licitações — mostram até onde a concorrência costuma descer.</p>`
+    : `<p class="small muted">${it.c ? (S.cfg.proxy ? "Sem compras registradas para este código nos últimos 12 meses." : "Este item ainda não está na base de preços do robô. Configure o proxy em Configurações para consultar ao vivo, ou aguarde a próxima coleta.") : "Item sem código CATMAT — o governo não tem série de preços padronizada. Apoie-se nas cotações de fornecedores."}</p>`;
+  const fator = 1 - r.T - r.M;
   const estrat = [];
-  if (r.agr != null) estrat.push(`<li><b>Agressivo</b> (alta chance): ${brl(r.agr)} — compre por até <b>${brl(r.agr * (1 - r.T - r.M))}</b></li>`);
-  if (r.equ != null) estrat.push(`<li><b>Equilibrado</b>: ${brl(r.equ)} — compre por até <b>${brl(r.equ * (1 - r.T - r.M))}</b></li>`);
-  if (r.con != null) estrat.push(`<li><b>Conservador</b> (pouca chance): ${brl(r.con)} — compre por até <b>${brl(r.con * (1 - r.T - r.M))}</b></li>`);
-  return `<div class="detail-inner">
-    <div><h4>Últimas compras do governo deste item</h4>${histTab}</div>
-    <div>
-      <h4>Estratégia de lance</h4>
-      ${estrat.length ? `<ul class="small" style="padding-left:18px;margin:0 0 10px">${estrat.join("")}</ul>
-        <div class="small muted" style="margin-bottom:12px">“Compre por até” já desconta impostos, frete, outros custos e sua margem mínima de ${nfmt(S.cfg.marg, 1)}%.${r.fonteRef === "teto" ? " Sem histórico, os níveis usam deságios típicos de pregão (15–25% abaixo do teto)." : ""}</div>`
-        : `<p class="small muted">Sem teto nem histórico: pesquise o preço de mercado e informe seu custo.</p>`}
-      ${r.pMin ? `<div class="callout info small" style="margin-bottom:12px">Com custo de ${brl(r.custo)}, seu <b>preço mínimo</b> para manter ${nfmt(S.cfg.marg, 1)}% de margem é <b>${brl(r.pMin)}</b>.${r.teto && r.pMin > r.teto ? " Isso está acima do teto do edital: não compensa." : ""}</div>` : ""}
-      <h4>Onde comprar mais barato</h4>
-      ${linksFornecedores(it.d)}
+  if (r.agr != null) estrat.push(`<tr><td><b>Agressivo</b><div class="small muted">alta chance</div></td><td class="r num">${brl(r.agr)}</td><td class="r num"><b>${brl(r.agr * fator)}</b></td></tr>`);
+  if (r.equ != null) estrat.push(`<tr><td><b>Equilibrado</b><div class="small muted">mediana do mercado</div></td><td class="r num">${brl(r.equ)}</td><td class="r num"><b>${brl(r.equ * fator)}</b></td></tr>`);
+  if (r.con != null) estrat.push(`<tr><td><b>Conservador</b><div class="small muted">pouca chance</div></td><td class="r num">${brl(r.con)}</td><td class="r num"><b>${brl(r.con * fator)}</b></td></tr>`);
+  const estrategia = `${estrat.length ? `<table class="hist" style="max-width:520px"><thead><tr><th>Estratégia</th><th class="r">Lance</th><th class="r">Compre por até</th></tr></thead><tbody>${estrat.join("")}</tbody></table>
+      <p class="small muted">“Compre por até” desconta impostos (${nfmt(S.cfg.imp, 1)}%), frete (${nfmt(taxas(ed).freteP, 1)}%), outros custos (${nfmt(S.cfg.out, 1)}%) e sua margem mínima (${nfmt(S.cfg.marg, 1)}%).${r.fonteRef === "teto" ? " Sem histórico, os níveis usam deságios típicos de pregão (15–25% abaixo do teto)." : ""}</p>`
+      : `<p class="small muted">Sem teto nem histórico: pesquise o preço de mercado e informe seu custo.</p>`}
+    ${r.pMin ? `<div class="note small">Com custo de ${brl(r.custo)}, seu <b>preço mínimo</b> para manter ${nfmt(S.cfg.marg, 1)}% de margem é <b>${brl(r.pMin)}</b>. Na disputa, não dê lance abaixo dele.${r.teto && r.pMin > r.teto ? " Está acima do teto do edital: não compensa." : ""}</div>` : ""}`;
+  return `<div class="dtabs" data-key="${esc(r.key)}">
+      <button data-pane="cot" class="on">1. Cotações de fornecedores${nCot ? ` (${nCot})` : ""}</button>
+      <button data-pane="hist">2. Preços pagos pelo governo${h ? ` (${h.n})` : ""}</button>
+      <button data-pane="estr">3. Estratégia de lance</button>
+      <button data-pane="onde">4. Onde procurar</button>
     </div>
-  </div>`;
+    <div class="dpane" data-pane="cot">${cotacaoHTML(it, r, ed)}</div>
+    <div class="dpane hidden" data-pane="hist">${histTab}</div>
+    <div class="dpane hidden" data-pane="estr">${estrategia}</div>
+    <div class="dpane hidden" data-pane="onde"><h4>Busca pronta nas principais fontes</h4>${linksFornecedores(it.d)}
+      <p class="small muted">Dica: além da internet, ligue para 2 ou 3 distribuidores da região (aba <b>Fornecedores</b>). Em lotes grandes o desconto costuma superar o melhor preço online, e o frete local é menor.</p></div>`;
 }
 
 function ligarAnalise() {
@@ -734,7 +782,8 @@ function ligarAnalise() {
     $(".tg", tr).onclick = () => {
       const det = box.querySelector(`[data-detail="${CSS.escape(key)}"]`);
       det.classList.toggle("hidden");
-      $(".tg", tr).textContent = det.classList.contains("hidden") ? "▾" : "▴";
+      tr.classList.toggle("aberto", !det.classList.contains("hidden"));
+      $(".tg", tr).textContent = det.classList.contains("hidden") ? "Cotar ▾" : "Fechar ▴";
     };
     $(".sel", tr).onchange = e => { S.sel[key] = e.target.checked; store.set("sel", S.sel); renderAnaliseMantendo(); };
     $(".cost", tr).onchange = e => {
@@ -745,16 +794,46 @@ function ligarAnalise() {
       renderAnaliseMantendo(key);
     };
   });
+
+  // Painel de detalhe: abas, cotações, agente de IA, pedido de cotação
+  const itemPorKey = k => ed.itens.find(i => ed.id + "#" + i.n === k);
+  $$("tr.detail", box).forEach(det => {
+    const key = det.dataset.detail, it = itemPorKey(key);
+    $$(".dtabs button", det).forEach(b => b.onclick = () => {
+      $$(".dtabs button", det).forEach(x => x.classList.toggle("on", x === b));
+      $$(".dpane", det).forEach(p => p.classList.toggle("hidden", p.dataset.pane !== b.dataset.pane));
+      S.abaDetalhe = b.dataset.pane;
+    });
+    $(".cot-form", det)?.addEventListener("submit", ev => {
+      ev.preventDefault();
+      const f = new FormData(ev.target), n = k => parseFloat(f.get(k)) || 0;
+      Cot.adicionar(key, { forn: f.get("forn").trim(), tipo: f.get("tipo"), cidade: f.get("cidade").trim(), preco: n("preco"), frete: n("frete"), lote: n("lote"), prazo: f.get("prazo").trim(), link: f.get("link").trim(), atende: f.get("atende"), fonte: "manual" });
+      renderAnaliseMantendo();
+    });
+    det.addEventListener("click", ev => {
+      const t = ev.target.closest("button, a");
+      if (!t) return;
+      if (t.dataset.rmcot) { Cot.remover(key, t.dataset.rmcot); renderAnaliseMantendo(); }
+      else if (t.dataset.importar) { importarPesquisa(ed, it, key); renderAnaliseMantendo(); }
+      else if (t.dataset.ia) pesquisarComIA(it, ed, key, $(`[data-iaout="${CSS.escape(key)}"]`, det));
+      else if (t.dataset.pedido) { const o = $(`[data-pedidoout="${CSS.escape(key)}"]`, det); o.innerHTML = o.innerHTML ? "" : pedidoHTML(it, ed); }
+      else if (t.hasAttribute("data-copiar")) { navigator.clipboard?.writeText($("textarea", det).value).then(() => toast("Texto copiado"), () => toast("Selecione e copie o texto")); }
+    });
+  });
 }
 
-/* Re-renderiza preservando rolagem e detalhes abertos. */
+/* Re-renderiza preservando rolagem, detalhes abertos e aba ativa. */
 function renderAnaliseMantendo(focoKey) {
-  const abertos = $$("tr.detail:not(.hidden)").map(t => t.dataset.detail);
+  const abertos = $$("tr.detail:not(.hidden)").map(t => [t.dataset.detail, $(".dtabs button.on", t)?.dataset.pane]);
   const y = window.scrollY;
   renderAnalise();
-  abertos.forEach(k => {
-    $(`[data-detail="${CSS.escape(k)}"]`)?.classList.remove("hidden");
-    const tr = $(`tr.item[data-key="${CSS.escape(k)}"] .tg`); if (tr) tr.textContent = "▴";
+  abertos.forEach(([k, aba]) => {
+    const det = $(`[data-detail="${CSS.escape(k)}"]`);
+    if (!det) return;
+    det.classList.remove("hidden");
+    $(`.dtabs button[data-pane="${aba}"]`, det)?.click();
+    const tr = $(`tr.item[data-key="${CSS.escape(k)}"]`);
+    if (tr) { tr.classList.add("aberto"); $(".tg", tr).textContent = "Fechar ▴"; }
   });
   window.scrollTo(0, y);
   if (focoKey) {
@@ -806,11 +885,115 @@ function baixar(nome, conteudo, tipo) {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+/* ---------------- CASOS REAIS ---------------- */
+const DECISAO_ROTULO = { ENTRAR: "Entrar", AVALIAR: "Avaliar com cautela", "NAO ENTRAR": "Não entrar" };
+function renderCasos() {
+  const box = $("#view-casos");
+  const casos = S.casos || [];
+  const cab = `<div class="section-title"><span class="eyebrow">Estudos de caso</span></div>
+    <div class="section-title"><h2>Casos reais de revenda sem estoque</h2></div>
+    <p class="lede">Editais abertos na região de Campinas analisados do início ao fim: leitura dos itens, cotação em marketplaces, atacados, fábricas e distribuidores locais, cálculo do preço mínimo e a decisão final. Use como roteiro para os seus próprios editais.</p>`;
+  if (!casos.length) { box.innerHTML = cab + `<div class="card empty"><h3>Nenhum estudo publicado ainda</h3></div>`; return; }
+  box.innerHTML = cab + `<div class="casos">${casos.map((c, ci) => {
+    const dec = c.decisao_classe;
+    const linhas = c.itens.map(i => {
+      const precos = i.cotacoes.filter(q => q.preco_unit > 0).map(q => q.preco_unit);
+      return `<tr><td class="num">${esc(i.n)}</td><td>${esc(i.descricao_curta)}<div class="small muted">${nfmt(i.qtd)} ${esc(i.unidade)} · ${i.cotacoes.length} fontes consultadas</div></td>
+        <td class="r num">${brl(i.teto)}</td><td class="r num">${i.melhor_custo_unit ? brl(i.melhor_custo_unit) : "–"}<div class="small muted">${esc((i.fonte_melhor || "").slice(0, 40))}</div></td>
+        <td class="r num">${i.preco_minimo_viavel ? brl(i.preco_minimo_viavel) : "–"}</td>
+        <td><span class="verdict ${i.decisao === "ENTRAR" ? "v-go" : i.decisao === "AVALIAR" ? "v-tight" : "v-no"}">${DECISAO_ROTULO[i.decisao] || esc(i.decisao)}</span></td></tr>
+        <tr><td></td><td colspan="5" class="small muted" style="padding-top:0">${esc(i.motivo)}${precos.length > 1 ? ` · faixa cotada ${brl(Math.min(...precos))} a ${brl(Math.max(...precos))}` : ""}</td></tr>`;
+    }).join("");
+    return `<article class="card">
+      <div class="caso-h">
+        <div><span class="eyebrow">Caso ${ci + 1} · ${esc(c.edital.municipio)}/${esc(c.edital.uf)} · ${esc(c.edital.modalidade || "")}</span>
+          <h3>${esc(c.edital.objeto)}</h3>
+          <div class="small muted">${esc(c.edital.orgao)} · propostas até ${dataHoraBR(c.edital.encerramento)} · perfil: ${esc(c.persona.split(/[,:(]/)[0].slice(0, 80))}</div></div>
+        <div class="decisao ${dec}">${esc(c.decisao_titulo)}</div>
+      </div>
+      <div class="caso-b">
+        <div>
+          <p style="margin-top:0">${esc(c.resumo)}</p>
+          <div class="table-wrap"><table class="hist"><thead><tr><th>#</th><th>Item</th><th class="r">Teto</th><th class="r">Melhor custo</th><th class="r">Preço mínimo</th><th>Decisão</th></tr></thead><tbody>${linhas}</tbody></table></div>
+        </div>
+        <div>
+          <h4 class="eyebrow" style="margin:0 0 4px">Riscos e cuidados</h4>
+          <ul>${(c.riscos || []).slice(0, 5).map(r => `<li>${esc(r)}</li>`).join("")}</ul>
+          ${c.exigencias?.length ? `<h4 class="eyebrow" style="margin:0 0 4px">Exigências regulatórias</h4><ul>${c.exigencias.slice(0, 4).map(r => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}
+          <h4 class="eyebrow" style="margin:0 0 4px">Lição</h4>
+          <p class="small" style="margin-top:4px">${esc(c.licao)}</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn sm primary" data-caso="${esc(c.edital_id)}">Abrir análise com cotações</button>
+            <a class="btn sm" href="${esc(c.edital.url)}" target="_blank" rel="noopener">Edital no PNCP</a>
+          </div>
+        </div>
+      </div>
+    </article>`;
+  }).join("")}</div>`;
+  $$("[data-caso]", box).forEach(b => b.onclick = () => abrirAnalise(b.dataset.caso));
+}
+
+/* ---------------- FORNECEDORES ---------------- */
+function renderFornecedores() {
+  const box = $("#view-fornecedores");
+  const lista = S.fornecedores || [];
+  const segs = [...new Set(lista.map(f => f.segmento))].sort();
+  box.innerHTML = `<div class="section-title"><span class="eyebrow">Rede de fornecedores</span></div>
+    <div class="section-title"><h2>Onde comprar para revender</h2></div>
+    <p class="lede">Distribuidores, atacados e fábricas identificados nas pesquisas de cotação. Na revenda sem estoque, o melhor preço costuma vir de um distribuidor da região comprando o lote inteiro — peça cotação por escrito com frete até o órgão e validade de 60 dias.</p>
+    <div class="toolbar">
+      <input type="search" id="fornQ" placeholder="Buscar por nome, cidade ou produto" style="max-width:320px">
+      <select id="fornSeg"><option value="">Todos os segmentos</option>${segs.map(s => `<option>${esc(s)}</option>`).join("")}</select>
+      <span class="status-line grow" id="fornN"></span>
+    </div>
+    <div class="card"><div class="table-wrap"><table class="cart"><thead><tr><th>Fornecedor</th><th>Tipo</th><th>Cidade</th><th>Segmento</th><th>Contato / site</th></tr></thead><tbody id="fornBody"></tbody></table></div></div>`;
+  const pinta = () => {
+    const q = norm($("#fornQ").value), sg = $("#fornSeg").value;
+    const base = achaMunicipio(S.cfg.base, S.cfg.uf);
+    const f = lista.filter(x => (!sg || x.segmento === sg) && (!q || norm([x.nome, x.cidade, x.segmento, x.produtos].join(" ")).includes(q)))
+      .map(x => ({ ...x, _d: distanciaKm(base, achaMunicipio((x.cidade || "").split("/")[0], (x.cidade || "").split("/")[1]?.trim() || "SP")) }))
+      .sort((a, b) => (a._d ?? 1e9) - (b._d ?? 1e9));
+    $("#fornN").textContent = `${f.length} fornecedores · ordenados pela distância de ${S.cfg.base || "sua cidade"}`;
+    $("#fornBody").innerHTML = f.map(x => `<tr><td><b>${esc(x.nome)}</b>${x.produtos ? `<div class="small muted">${esc(x.produtos)}</div>` : ""}</td>
+      <td><span class="tag">${esc(TIPOS_FORNECEDOR[x.tipo] || x.tipo || "–")}</span></td>
+      <td>${esc(x.cidade || "–")}${x._d != null ? `<div class="small muted">~${nfmt(x._d)} km</div>` : ""}</td><td>${esc(x.segmento)}</td>
+      <td class="small">${/^https?:/.test(x.contato || "") ? `<a href="${esc(x.contato)}" target="_blank" rel="noopener">${esc(x.contato.replace(/^https?:\/\/(www\.)?/, "").slice(0, 40))}</a>` : esc(x.contato || "–")}</td></tr>`).join("")
+      || `<tr><td colspan="5" class="empty">Nenhum fornecedor com esse filtro.</td></tr>`;
+  };
+  $("#fornQ").oninput = pinta; $("#fornSeg").onchange = pinta;
+  pinta();
+}
+
 /* ---------------- GUIA ---------------- */
 function renderGuia() {
   $("#view-guia").innerHTML = `
-  <div class="section-title"><h2>Guia MEI &amp; estratégia</h2><span class="muted">O essencial para começar a fornecer ao governo revendendo produtos.</span></div>
+  <div class="section-title"><h2>Guia de licitações para pequenas empresas</h2><span class="muted">O essencial para começar a fornecer ao governo revendendo produtos.</span></div>
   <div class="callout" style="margin-bottom:16px"><b>Atenção ao tamanho do contrato.</b> O MEI pode faturar no máximo <b>R$ 81 mil por ano</b> (valor vigente na última atualização deste guia — confirme com seu contador, há projetos de lei para elevar). Um edital de 1.000 cadeiras a R$ 700 soma R$ 700 mil: não cabe num MEI. Para contratos maiores, o caminho é <b>ME</b> (até R$ 360 mil/ano) ou <b>EPP</b> (até R$ 4,8 milhões/ano) — que mantêm as vantagens da Lei Complementar 123.</div>
+  <div class="card" style="margin-bottom:18px"><div class="card-h"><span class="eyebrow">Modelo de negócio</span><h3>Revenda sem estoque: como funciona</h3></div><div class="card-b">
+    <div class="jornada" style="margin-bottom:14px">
+      <div><i>1</i><b>Ganhar</b><span>Você disputa com o preço de um fornecedor já cotado, sem comprar nada.</span></div>
+      <div><i>2</i><b>Empenho</b><span>O órgão emite a nota de empenho / ordem de fornecimento.</span></div>
+      <div><i>3</i><b>Comprar</b><span>Só então você fecha o pedido com o fornecedor cotado.</span></div>
+      <div><i>4</i><b>Entregar</b><span>Entrega direta no órgão (ou via transportadora), com sua nota fiscal.</span></div>
+      <div><i>5</i><b>Receber</b><span>Pagamento em até ~30 dias após o aceite — planeje o capital de giro.</span></div>
+    </div>
+    <div class="guide">
+      <div><h4 class="eyebrow">O que aprendemos nos casos reais</h4><ul class="small">
+        <li><b>Marketplace é referência, não fornecedor.</b> Mercado Livre e afins servem para balizar preço; o melhor custo para lote veio de atacados B2B e distribuidores.</li>
+        <li><b>Distribuidores da região quase nunca publicam preço.</b> O caminho é o pedido de cotação por WhatsApp/e-mail (o painel gera o texto pronto).</li>
+        <li><b>Atas e resultados de outras licitações</b> mostram quem é o fabricante e a que preço ele vende ao governo — ótima pista para negociar.</li>
+        <li><b>Teto baixo é comum:</b> em papel A4 o teto (R$ 25) ficou abaixo do custo de mercado. Não entre só porque o volume é grande.</li>
+        <li><b>Produto para saúde exige AFE da Anvisa.</b> Sem a autorização, nem adianta cotar.</li>
+      </ul></div>
+      <div><h4 class="eyebrow">Regras de ouro</h4><ul class="small">
+        <li>Cotação <b>por escrito</b>, com frete até o órgão, prazo e validade de 60 dias.</li>
+        <li>Fornecedor precisa ter <b>estoque ou prazo garantido</b> — você responde pelo atraso.</li>
+        <li>Confira <b>unidade</b> (caixa x unidade), <b>marca/modelo</b> e exigência de <b>amostra</b>.</li>
+        <li>Em <b>registro de preços (SRP)</b> o órgão pede aos poucos: o frete de cada entrega pesa mais.</li>
+        <li>Nunca dê lance abaixo do <b>preço mínimo</b> que o painel calcula.</li>
+      </ul></div>
+    </div>
+  </div></div>
   <div class="guide">
     <div class="card"><div class="card-h"><h3>Porte da empresa</h3></div><div class="card-b">
       <table class="simple"><thead><tr><th>Porte</th><th>Faturamento/ano</th><th>Para licitação</th></tr></thead><tbody>
@@ -878,6 +1061,7 @@ function renderGuia() {
 /* ---------------- CONFIG ---------------- */
 function preencherConfig() {
   const c = S.cfg;
+  $("#cEmpresa").value = c.empresa || ""; $("#cChave").value = c.chaveIA || "";
   $("#cPorte").value = c.porte; $("#cUf").value = c.uf; $("#cBase").value = c.base; $("#cFat").value = c.fat || "";
   $("#cImp").value = c.imp; $("#cFrete").value = c.frete; $("#cOut").value = c.out; $("#cMarg").value = c.marg; $("#cDist").value = c.dist;
   $("#cProxy").value = c.proxy || "";
@@ -885,6 +1069,7 @@ function preencherConfig() {
 function salvarConfig() {
   const n = id => parseFloat($(id).value) || 0;
   Object.assign(S.cfg, {
+    empresa: $("#cEmpresa").value.trim(), chaveIA: $("#cChave").value.trim(),
     porte: $("#cPorte").value, uf: $("#cUf").value, base: $("#cBase").value.trim(), fat: n("#cFat"),
     imp: n("#cImp"), frete: n("#cFrete"), out: n("#cOut"), marg: n("#cMarg"), dist: n("#cDist"), proxy: $("#cProxy").value.trim(),
   });
@@ -901,6 +1086,8 @@ function irPara(v) {
   if (v === "analise" && !S.atual) renderAnalise();
   if (v === "carteira") renderCarteira();
   if (v === "config") preencherConfig();
+  if (v === "casos") renderCasos();
+  if (v === "fornecedores") renderFornecedores();
   if (location.hash !== "#" + v) history.replaceState(null, "", "#" + v);
   window.scrollTo(0, 0);
 }
@@ -921,6 +1108,7 @@ async function iniciar() {
   $("#fUf").value = S.cfg.uf; $("#fBase").value = S.cfg.base;
   $("#cartCount").textContent = Object.keys(S.carteira).length;
   renderGuia();
+  renderJornadas();
 
   $$("#tabs button").forEach(b => b.onclick = () => irPara(b.dataset.view));
   $$("#fonte button").forEach(b => b.onclick = () => { setFonte(b.dataset.v); buscar(); });
@@ -945,19 +1133,22 @@ async function iniciar() {
   });
   $("#cSave").onclick = salvarConfig;
   $("#cartCsv").onclick = exportarCsv;
-  $("#bkExport").onclick = () => baixar("radar-backup.json", JSON.stringify({ cfg: S.cfg, custos: S.custos, sel: S.sel, carteira: S.carteira }, null, 1), "application/json");
+  $("#bkExport").onclick = () => baixar("radar-backup.json", JSON.stringify({ cfg: { ...S.cfg, chaveIA: "" }, custos: S.custos, sel: S.sel, carteira: S.carteira, cotacoes: Cot.todas }, null, 1), "application/json");
   $("#bkImport").onchange = async e => {
     try {
       const d = JSON.parse(await e.target.files[0].text());
       for (const k of ["cfg", "custos", "sel", "carteira"]) if (d[k]) { S[k] = d[k]; store.set(k, d[k]); }
+      if (d.cotacoes) { Cot.todas = d.cotacoes; Cot.salvar(); }
       preencherConfig(); toast("Backup restaurado");
       $("#cartCount").textContent = Object.keys(S.carteira).length;
     } catch { toast("Arquivo inválido"); }
   };
 
   // Dados locais (gerados pelo robô)
-  const [mun, editais, precos, meta] = await Promise.all(
-    ["data/municipios.json", "data/editais.json", "data/precos.json", "data/meta.json"].map(u => getJSON(u).catch(() => null)));
+  const [mun, editais, precos, meta, casos, fornecedores] = await Promise.all(
+    ["data/municipios.json", "data/editais.json", "data/precos.json", "data/meta.json", "data/casos.json", "data/fornecedores.json"].map(u => getJSON(u).catch(() => null)));
+  S.casos = casos || [];
+  S.fornecedores = fornecedores || [];
   for (const [ibge, nome, uf, lat, lon] of mun || []) {
     const m = { ibge, nome, uf, lat, lon };
     S.mun.porIbge.set(ibge, m);
@@ -971,7 +1162,7 @@ async function iniciar() {
   if (!S.base.editais.length) setFonte("live");
 
   const v = location.hash.slice(1);
-  irPara(["radar", "carteira", "guia", "config"].includes(v) ? v : "radar");
+  irPara(["radar", "casos", "fornecedores", "carteira", "guia", "config"].includes(v) ? v : "radar");
   buscar();
 }
 

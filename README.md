@@ -21,6 +21,18 @@ O painel tem duas fontes:
 - **Base do robô** — rápida e completa (itens, valores, histórico de preços) para os estados do `config.json`.
 - **Ao vivo (PNCP)** — busca em qualquer estado na hora; os itens são carregados direto do PNCP.
 
+## Cotação de fornecedores (revenda sem estoque)
+
+Em cada item do edital, a aba **Cotações de fornecedores** guarda várias cotações (marketplace,
+atacado, distribuidor da região, fábrica) com frete, lote mínimo e prazo. O menor custo efetivo
+entre as que atendem à especificação vira o custo da análise. Há ainda:
+
+- **Agente de IA** (opcional): com uma chave da API Claude em *Configurações*, pesquisa preços na web
+  e registra as cotações com link. A chave fica só no navegador de quem usa.
+- **Pedido de cotação**: texto pronto para WhatsApp/e-mail com especificação, quantidade e local de entrega.
+- **Casos reais** (`data/casos.json`) e **Fornecedores** (`data/fornecedores.json`): estudos de editais
+  abertos da região de Campinas, com as cotações pesquisadas e a decisão final.
+
 ## Publicar no GitHub (uma vez)
 
 1. Crie um repositório no GitHub (ex.: `radar-licitacoes`) e envie esta pasta:
