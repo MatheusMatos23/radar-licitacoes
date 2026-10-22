@@ -34,6 +34,7 @@ const S = {
   livePagina: 0,
   liveTotal: 0,
   atual: null,
+  itFiltro: { q: "", ver: "todos", ord: "num" }, // filtro da tabela de itens da análise
 };
 
 /* ---------------- utilitários ---------------- */
@@ -272,7 +273,7 @@ function alertasItem(it) {
 
 const VEREDITO = {
   go: ["v-go", "Entrar forte"], ok: ["v-ok", "Viável"], tight: ["v-tight", "Margem apertada"],
-  no: ["v-no", "Não compensa"], unk: ["v-unk", "Informe o custo"],
+  no: ["v-no", "Não compensa"], unk: ["v-unk", "A cotar"],
 };
 
 /* Atratividade 0–100 de um edital para pequena empresa revendedora. */
@@ -427,7 +428,26 @@ async function enriquecerVivo() {
   if (!S.resultados.length) renderLista(true);
 }
 
+function renderAvisoBase() {
+  const box = $("#avisoBase");
+  if (S.cfg.base && baseAtual()) { box.innerHTML = ""; return; }
+  if (S.cfg.base) {
+    box.innerHTML = `<div class="callout aviso-base"><span>Não encontramos a cidade <b>${esc(S.cfg.base)}</b>. Escolha uma opção da lista para calcular distâncias.</span>
+      <input type="text" id="avisoCidade" list="cidades" placeholder="ex.: Paulínia"><button class="btn sm primary" id="avisoOk">Corrigir</button></div>`;
+  } else {
+    box.innerHTML = `<div class="callout info aviso-base"><span><b>Defina sua cidade base</b> para o painel calcular a distância até cada órgão, o frete e priorizar o que está perto.</span>
+      <input type="text" id="avisoCidade" list="cidades" placeholder="ex.: Paulínia"><button class="btn sm primary" id="avisoOk">Definir</button></div>`;
+  }
+  $("#avisoOk").onclick = () => {
+    const v = $("#avisoCidade").value.trim();
+    if (!v) return;
+    S.cfg.base = v; store.set("cfg", S.cfg); $("#fBase").value = v;
+    renderAvisoBase(); buscar();
+  };
+}
+
 function atualizarKPIs() {
+  renderAvisoBase();
   const r = S.resultados;
   $("#kN").textContent = nfmt(r.length);
   $("#kNs").textContent = r.filter(e => e._score >= 70).length + " com atratividade alta";
@@ -453,7 +473,7 @@ const ETAPAS = [
 function renderJornadas() {
   $$(".jornada[data-etapa]").forEach(el => {
     const atual = +el.dataset.etapa;
-    el.innerHTML = ETAPAS.map(([t, s], i) => `<div class="${i + 1 === atual ? "on" : i + 1 < atual ? "ok" : ""}"><i>ETAPA ${i + 1}</i><b>${t}</b><span>${s}</span></div>`).join("");
+    el.innerHTML = ETAPAS.map(([t, s], i) => `<div class="${i + 1 === atual ? "on" : i + 1 < atual ? "ok" : ""}"><i>${i + 1}</i><b>${t}</b><span>${s}</span></div>`).join("");
   });
 }
 
@@ -466,40 +486,63 @@ function prazoTag(enc) {
   return `<span class="tag">${Math.floor(d)} dias para propor</span>`;
 }
 
+/* Títulos de edital costumam vir em CAIXA ALTA: converte para frase, preservando siglas. */
+const SIGLAS = /\b(sp|mg|pr|rj|me|epp|mei|srp|pe|ti|led|usb|hd|ssd|ram|epi|sus|ubs|cpi|pncp|abnt|nbr|gb|tb|a4|a3|cnpj|cep|inss)\b/gi;
+function frase(t) {
+  t = String(t || "").trim();
+  const letras = t.replace(/[^A-Za-zÀ-ú]/g, "");
+  if (!letras || letras.replace(/[^A-ZÀ-Ý]/g, "").length / letras.length < .6) return t;
+  t = t.toLowerCase().replace(/(^|[.!?]\s+)([a-zà-ú])/g, (m, p, c) => p + c.toUpperCase());
+  return t.replace(SIGLAS, m => m.toUpperCase());
+}
+/* Nomes de órgãos: "SAO PAULO SECRETARIA DA SEGURANCA" -> "Sao Paulo Secretaria da Seguranca". */
+const MINUSCULAS = new Set(["de", "da", "do", "das", "dos", "e", "a", "o", "em", "para"]);
+function nomeProprio(t) {
+  t = String(t || "").trim();
+  if (t !== t.toUpperCase()) return t;
+  return t.toLowerCase().split(/\s+/).map((w, i) => i && MINUSCULAS.has(w) ? w : w.charAt(0).toUpperCase() + w.slice(1)).join(" ").replace(SIGLAS, m => m.toUpperCase());
+}
+const plural = (n, um, varios) => `${nfmt(n)} ${n === 1 ? um : varios}`;
+
 function cardHTML(ed) {
   const salvo = !!S.carteira[ed.id];
-  const tags = [prazoTag(ed.encerramento)];
-  if (ed._me) tags.push(`<span class="tag gold">${ed._me} item(ns) ME/EPP</span>`);
-  if (ed._hist) tags.push(`<span class="tag blue">${ed._hist} com histórico de preço</span>`);
+  const d = dias(ed.encerramento);
+  const tags = [];
+  if (ed._me) tags.push(`<span class="tag gold">${plural(ed._me, "item exclusivo ME/EPP", "itens exclusivos ME/EPP")}</span>`);
+  if (ed._hist) tags.push(`<span class="tag blue">${plural(ed._hist, "item com histórico de preço", "itens com histórico de preço")}</span>`);
   if (ed._valor && ed._valor > limiteRestante()) tags.push(`<span class="tag red">Acima do limite ${esc(S.cfg.porte)}</span>`);
-  if (ed.itens && ed.itens.length && ed.itens.every(i => i.s)) tags.push(`<span class="tag">Orçamento sigiloso</span>`);
   if (ed.itens?.some(i => ALERTAS[0][0].test(i.d))) tags.push(`<span class="tag red" title="${esc(ALERTAS[0][3])}">Produto para saúde: exige AFE</span>`);
+  if (ed.itens && ed.itens.length && ed.itens.every(i => i.s)) tags.push(`<span class="tag">Orçamento sigiloso</span>`);
+  if (/registro de pre[cç]o|\bSRP\b/i.test(ed.objeto || "")) tags.push(`<span class="tag">Registro de preços</span>`);
   if (!ed.itens) tags.push(`<span class="tag"><span class="loader" style="width:10px;height:10px"></span> carregando itens</span>`);
   let match = "";
   if (ed._alvo?.length) {
-    const ex = ed._alvo.slice(0, 2).map(i => `<b>${esc(i.d.slice(0, 70))}</b> (${nfmt(i.q)} ${esc(i.u)})`).join("; ");
-    match = `<div class="match">${ed._alvo.length} item(ns) com sua busca: ${ex}${ed._alvo.length > 2 ? "…" : ""}</div>`;
+    const ex = ed._alvo.slice(0, 2).map(i => `<b>${esc(frase(i.d).slice(0, 70))}</b> (${nfmt(i.q)} ${esc(i.u)})`).join("; ");
+    match = `<div class="match">${plural(ed._alvo.length, "item corresponde", "itens correspondem")} à sua busca: ${ex}${ed._alvo.length > 2 ? "…" : ""}</div>`;
   }
+  const prazo = d == null ? "–" : d < 1 ? "hoje" : `${Math.floor(d)} dia${Math.floor(d) === 1 ? "" : "s"}`;
+  const corPrazo = d != null && d < 3 ? "var(--red)" : d != null && d <= 7 ? "var(--amber)" : "var(--ink-3)";
   return `<article class="card opp" data-card="${esc(ed.id)}">
-    ${anel(ed._score)}
-    <div>
-      <h3>${esc((ed.objeto || ed.titulo || "").slice(0, 230))}</h3>
-      <div class="org">${esc(ed.orgao)} · ${esc(ed.municipio)}/${esc(ed.uf)}</div>
-      <div class="meta">
-        <span>${ICON.cal} Encerra ${dataHoraBR(ed.encerramento)}</span>
-        <span>${ICON.pin} ${ed._dist != null ? "~" + nfmt(ed._dist) + " km" : "distância –"}</span>
-        <span>${ICON.money} ${ed._valor ? brlCurto(ed._valor) : ed.itens ? "valor sigiloso/não informado" : "–"}</span>
-        <span>${ICON.list} ${ed.itens ? ed._nItens + " itens de material" : "itens –"}</span>
-        <span>${ICON.gavel} ${esc(ed.modalidade)}</span>
-      </div>
-      <div class="tags">${tags.join("")}</div>
+    <div class="opp-score">${anel(ed._score)}</div>
+    <div class="opp-main">
+      <div class="opp-kicker">${esc(ed.modalidade || "")}${ed.itens ? " · " + plural(ed._nItens, "item de material", "itens de material") : ""}</div>
+      <h3><a href="#edital=${encodeURIComponent(ed.id)}" data-analisar="${esc(ed.id)}">${esc(frase(ed.objeto || ed.titulo).slice(0, 260))}</a></h3>
+      <div class="org">${esc(nomeProprio(ed.orgao))} · ${esc(ed.municipio)}/${esc(ed.uf)}</div>
+      ${tags.length ? `<div class="tags">${tags.join("")}</div>` : ""}
       ${match}
     </div>
-    <div class="actions">
-      <button class="btn primary sm" data-analisar="${esc(ed.id)}">Analisar</button>
-      <button class="btn sm" data-salvar="${esc(ed.id)}">${salvo ? ICON.starOn + " Salvo" : ICON.star + " Salvar"}</button>
-      <a class="btn sm" href="${esc(ed.url)}" target="_blank" rel="noopener">${ICON.ext} PNCP</a>
-    </div>
+    <aside class="opp-side">
+      <dl>
+        <div><dt>Valor estimado</dt><dd class="valor num">${ed._valor ? brlCurto(ed._valor) : ed.itens ? "sigiloso" : "–"}</dd></div>
+        <div><dt>Propostas até</dt><dd>${dataHoraBR(ed.encerramento)}<small style="display:block;color:${corPrazo}">${d != null && d >= 1 ? "faltam " : ""}${prazo}</small></dd></div>
+        <div><dt>Distância</dt><dd>${ed._dist != null ? "~" + nfmt(ed._dist) + " km" : '<small>defina sua cidade</small>'}</dd></div>
+      </dl>
+      <div class="opp-actions">
+        <button class="btn primary sm" data-analisar="${esc(ed.id)}">Analisar</button>
+        <button class="btn sm icon" data-salvar="${esc(ed.id)}" title="${salvo ? "Remover da carteira" : "Salvar na carteira"}">${salvo ? ICON.starOn : ICON.star}</button>
+        <a class="btn sm icon" href="${esc(ed.url)}" target="_blank" rel="noopener" title="Abrir no PNCP">${ICON.ext}</a>
+      </div>
+    </aside>
   </article>`;
 }
 
@@ -596,11 +639,30 @@ function faixa(r) {
   return s + "</svg>";
 }
 
+/* "01263896000164-1-000755/2026" -> edital mínimo, completado pela API de consulta do PNCP. */
+async function editalPorControle(id) {
+  const m = /^(\d{14})-\d+-0*(\d+)\/(\d{4})$/.exec(id);
+  if (!m) return null;
+  const [, cnpj, seq, ano] = m;
+  const ed = { id, cnpj, ano, seq, objeto: "Edital " + id, url: `https://pncp.gov.br/app/editais/${cnpj}/${ano}/${seq}`, itens: null };
+  try {
+    const d = await getJSON(`${PNCP}/consulta/v1/orgaos/${cnpj}/compras/${ano}/${seq}`);
+    if (d) Object.assign(ed, {
+      objeto: d.objetoCompra, orgao: d.orgaoEntidade?.razaoSocial, unidade: d.unidadeOrgao?.nomeUnidade,
+      municipio: d.unidadeOrgao?.municipioNome, uf: d.unidadeOrgao?.ufSigla, ibge: d.unidadeOrgao?.codigoIbge,
+      modalidade: d.modalidadeNome, encerramento: (d.dataEncerramentoProposta || "").slice(0, 16),
+    });
+  } catch { /* fica com o mínimo */ }
+  return ed;
+}
+
 async function abrirAnalise(id) {
-  let ed = acharEdital(id);
+  let ed = acharEdital(id) || await editalPorControle(id);
   if (!ed) return toast("Edital não encontrado");
+  if (S.atual?.id !== ed.id) S.itFiltro = { q: "", ver: "todos", ord: "num" };
   S.atual = ed;
   irPara("analise");
+  history.replaceState(null, "", "#edital=" + encodeURIComponent(id)); // link compartilhável
   const box = $("#analise");
   if (!ed.itens) {
     box.innerHTML = `<div class="card empty"><span class="loader"></span><h3>Carregando itens do edital no PNCP…</h3></div>`;
@@ -626,8 +688,20 @@ function renderAnalise() {
   const f = lerFiltros();
   const itens = ed.itens.filter(i => i.m !== "S");
   const servicos = ed.itens.length - itens.length;
-  const ordem = ed._alvo?.length ? [...ed._alvo, ...itens.filter(i => !ed._alvo.includes(i))] : itens;
-  const calc = new Map(ordem.map(i => [i, calcular(i, ed)]));
+  const todos = ed._alvo?.length ? [...ed._alvo, ...itens.filter(i => !ed._alvo.includes(i))] : itens;
+  const calc = new Map(todos.map(i => [i, calcular(i, ed)]));
+  const F = S.itFiltro;
+  const qn = norm(F.q).split(/\s+/).filter(Boolean);
+  let ordem = todos.filter(i => {
+    const r = calc.get(i);
+    if (qn.length && !qn.every(t => norm(i.d).includes(t))) return false;
+    if (F.ver === "cotados" && !Cot.lista(r.key).length && r.custoManual == null) return false;
+    if (F.ver === "viaveis" && !["go", "ok"].includes(r.veredito)) return false;
+    if (F.ver === "me" && !(i.b === 1 || i.b === 3)) return false;
+    return true;
+  });
+  if (F.ord === "valor") ordem = [...ordem].sort((a, b) => b.v * b.q - a.v * a.q);
+  if (F.ord === "lucro") ordem = [...ordem].sort((a, b) => (calc.get(b).lucro ?? -1e12) - (calc.get(a).lucro ?? -1e12));
   const { freteP } = taxas(ed);
   const salvo = !!S.carteira[ed.id];
 
@@ -643,9 +717,9 @@ function renderAnalise() {
       <td class="desc"><div class="d" title="Clique para expandir">${esc(it.d)}</div>
         <div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap">${benef}${alertasItem(it)}${it.c ? `<span class="tag">CATMAT ${esc(it.c)}</span>` : ""}${r.unidadeSuspeita ? '<span class="tag amber" title="Histórico muito diferente do teto: confira a unidade (caixa x unidade, pacote, etc.)">confira a unidade</span>' : ""}</div></td>
       <td class="r num">${nfmt(it.q, 2)}<div class="small muted">${esc(it.u)}</div></td>
-      <td class="r num">${r.teto ? brl(r.teto) : '<span class="muted small">sigiloso</span>'}${r.teto && unidadesPorEmbalagem(it.d) ? `<div class="small muted">${brl(r.teto / unidadesPorEmbalagem(it.d), 3)}/un. (emb. ${unidadesPorEmbalagem(it.d)})</div>` : ""}</td>
+      <td class="r num">${r.teto ? brl(r.teto) + `<div class="tot">total ${brlCurto(r.teto * it.q)}</div>` : '<span class="muted small">sigiloso</span>'}${r.teto && unidadesPorEmbalagem(it.d) ? `<div class="small muted">${brl(r.teto / unidadesPorEmbalagem(it.d), 3)}/un. (emb. ${unidadesPorEmbalagem(it.d)})</div>` : ""}</td>
       <td class="r num"><b>${r.compreAte ? brl(r.compreAte) : "–"}</b>${r.custo != null && r.compreAte ? `<div class="small" style="color:${r.custo <= r.compreAte ? "var(--green)" : "var(--red)"}">${r.custo <= r.compreAte ? "folga " : "excede "}${pct(Math.abs(r.compreAte - r.custo) / r.compreAte)}</div>` : ""}</td>
-      <td>${faixa(r)}<div class="small muted num">${r.h ? `mediana ${brl(r.h.med)} · ${r.h.n} compras` : r.fonteRef === "teto" ? "sem histórico: base no teto" : "sem histórico"}</div></td>
+      <td>${r.h || r.custo ? faixa(r) : ""}<div class="small muted num">${r.h ? `mediana ${brl(r.h.med)} · ${r.h.n} compras` : "sem histórico de compras"}</div></td>
       <td class="r num"><b>${r.lance ? brl(r.lance) : "–"}</b><div class="small muted">${r.chance != null ? "chance ~" + pct(r.chance) : ""}</div></td>
       <td class="r"><input class="cost num" type="number" min="0" step="0.01" placeholder="${r.custo != null ? nfmt(r.custo, 2) : r.custoMax ? "até " + nfmt(r.custoMax, 2) : "R$"}" value="${r.custoManual ?? ""}" title="Custo unitário de compra. Vazio = usa a melhor cotação registrada.">
         ${r.custoManual == null && r.melhorCot ? `<div class="via" ${r.melhorCot.incerto ? 'style="color:var(--amber)" title="Nenhuma cotação confirmada atende à especificação"' : ""}>via cotação${r.melhorCot.incerto ? " (incerta)" : ""}: ${esc(r.melhorCot.forn.slice(0, 22))}</div>${(() => { const alt = Cot.aConfirmar(r.key, it.q); return alt ? `<div class="via" style="color:var(--amber)" title="${esc(alt.forn)}: confirme se atende à especificação">a confirmar: ${brl(alt.efetivo)}</div>` : ""; })()}` : r.custoManual == null ? `<div class="small muted">${Cot.lista(r.key).length ? "cotações sem preço" : "sem cotação"}</div>` : ""}</td>
@@ -658,7 +732,7 @@ function renderAnalise() {
 
   // Resumo dos itens marcados
   let receita = 0, receitaTotal = 0, custo = 0, lucro = 0, nSel = 0, semCusto = 0;
-  for (const it of ordem) {
+  for (const it of todos) {
     const r = calc.get(it);
     const sel = S.sel[r.key] ?? r.veredito !== "no";
     if (!sel || r.lance == null) continue;
@@ -682,9 +756,9 @@ function renderAnalise() {
     <div class="card" style="margin-bottom:16px">
       <div class="an-head">
         <div>
-          <div class="tags" style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap"><span class="tag blue">${esc(ed.modalidade)}</span>${prazoTag(ed.encerramento)}${/registro de pre[cç]o|SRP/i.test(ed.objeto || "") ? '<span class="tag amber" title="Registro de preços: o órgão compra aos poucos, sem garantia do total. Frete por entrega pesa mais.">Registro de preços (SRP)</span>' : ""}<span class="tag">${esc(ed.esfera || "")}</span></div>
-          <h2>${esc(ed.objeto || ed.titulo)}</h2>
-          <div class="muted">${esc(ed.orgao)}${ed.unidade && ed.unidade !== ed.orgao ? " · " + esc(ed.unidade) : ""}</div>
+          <div class="tags" style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap"><span class="tag blue">${esc(ed.modalidade)}</span>${prazoTag(ed.encerramento)}${/registro de pre[cç]o|SRP/i.test(ed.objeto || "") ? '<span class="tag amber" title="Registro de preços: o órgão compra aos poucos, sem garantia do total. Frete por entrega pesa mais.">Registro de preços (SRP)</span>' : ""}${ed.esfera ? `<span class="tag">${esc(ed.esfera)}</span>` : ""}</div>
+          <h2>${esc(frase(ed.objeto || ed.titulo))}</h2>
+          <div class="muted">${esc(nomeProprio(ed.orgao))}${ed.unidade && ed.unidade !== ed.orgao ? " · " + esc(nomeProprio(ed.unidade)) : ""}</div>
         </div>
         ${anel(ed._score)}
       </div>
@@ -699,13 +773,18 @@ function renderAnalise() {
 
     <div class="card" style="margin-bottom:16px">
       <div class="card-h"><h3>Resultado se você ganhar os itens marcados</h3><span class="muted small" style="margin-left:auto">${nSel} item(ns) marcados${semCusto ? ` · ${semCusto} sem custo (lucro considera só itens com custo)` : ""}</span></div>
-      <div class="summary">
+      ${!comCusto ? (() => {
+        const top = [...todos].sort((a, b) => b.v * b.q - a.v * a.q).slice(0, 5);
+        const vTop = top.reduce((a, i) => a + i.v * i.q, 0), vTot = todos.reduce((a, i) => a + (i.v > 0 ? i.v * i.q : 0), 0);
+        return `<div class="summary-vazio"><div><div class="l small muted">POTENCIAL</div><div class="big num">${brlCurto(receitaTotal)}</div></div>
+          <div class="small">Nenhum item tem custo ainda. Comece pelos <b>5 itens de maior valor</b>, que somam <b>${brlCurto(vTop)}</b> (${pct(vTot ? vTop / vTot : 0)} do edital): abra <b>Cotar</b> em cada um e registre ao menos três cotações. <button class="btn sm" id="verMaiores" style="margin-left:6px">Ordenar por valor</button></div></div>`;
+      })() : `<div class="summary">
         <div><div class="l">Receita (itens com custo)</div><div class="v num">${v0(receita)}</div><div class="small muted">potencial de todos os marcados: ${brl(receitaTotal, 0)}</div></div>
         <div><div class="l">Custo de compra</div><div class="v num">${v0(custo)}</div></div>
         <div><div class="l">Impostos + frete + outros</div><div class="v num">${v0(receita - custo - lucro)}</div></div>
         <div><div class="l">Lucro líquido</div><div class="v num ${!comCusto ? "" : lucro >= 0 ? "pos" : "neg"}">${v0(lucro)}</div></div>
         <div><div class="l">Margem</div><div class="v num ${margem == null ? "" : margem >= S.cfg.marg / 100 ? "pos" : "neg"}">${pct(margem)}</div></div>
-      </div>
+      </div>`}
       ${alertaPorte}
       ${dias(ed.encerramento) != null && dias(ed.encerramento) < 7 ? `<div class="callout" style="margin:12px 16px 14px">Prazo curto: faltam ${Math.max(0, Math.floor(dias(ed.encerramento)))} dia(s). Para revenda sem estoque, só entre se já tiver cotação firme por escrito.</div>` : ""}
     </div>
@@ -720,18 +799,24 @@ function renderAnalise() {
         <div class="field"><label>Margem mínima %</label><input type="number" step="0.5" data-p="marg" value="${S.cfg.marg}"></div>
         <div class="small muted" style="flex:1;min-width:220px">Frete aplicado neste edital: <b>${nfmt(freteP, 1)}%</b>. Digite o <b>seu custo unitário</b> de compra (com frete do fornecedor) em cada item — o painel calcula o lance, a chance e o lucro.</div>
       </div>
+      <div class="itens-bar">
+        <input type="search" id="itQ" placeholder="Filtrar itens (ex.: caneta)" value="${esc(S.itFiltro.q)}">
+        <div class="seg mini" id="itVer">${[["todos", "Todos"], ["viaveis", "Viáveis"], ["cotados", "Com cotação"], ["me", "Exclusivos ME/EPP"]].map(([v, l]) => `<button data-v="${v}" class="${S.itFiltro.ver === v ? "active" : ""}">${l}</button>`).join("")}</div>
+        <select id="itOrd"><option value="num">Ordem do edital</option><option value="valor" ${S.itFiltro.ord === "valor" ? "selected" : ""}>Maior valor total</option><option value="lucro" ${S.itFiltro.ord === "lucro" ? "selected" : ""}>Maior lucro</option></select>
+        <span class="small muted grow" style="text-align:right">${ordem.length} de ${todos.length} itens</span>
+      </div>
       <div class="table-wrap">
         <table class="items">
           <thead><tr><th title="Participar">✓</th><th>#</th><th>Item</th><th class="r">Qtd</th><th class="r">Teto unit.</th><th class="r" title="Custo máximo de compra para manter a margem mínima, dando lance no teto">Compre até</th><th>Preços pagos pelo governo</th><th class="r">Lance sugerido</th><th class="r">Seu custo unit.</th><th class="r">Lucro</th><th>Veredito</th><th></th></tr></thead>
-          <tbody>${linhas || `<tr><td colspan="12" class="empty">Este edital não tem itens de material.</td></tr>`}</tbody>
+          <tbody>${linhas || `<tr><td colspan="12" class="empty">${todos.length ? "Nenhum item com esse filtro." : "Este edital não tem itens de material."}</td></tr>`}</tbody>
         </table>
       </div>
       <div class="legend">
         <span><i style="background:#9db6dc"></i>faixa típica paga (25%–75%)</span>
-        <span><i style="background:#163a6b"></i>mediana</span>
-        <span><i style="background:#c0352b"></i>teto do edital</span>
-        <span><i style="background:#fff;border:2px solid #2563c9;border-radius:50%"></i>seu custo</span>
-        <span><i style="background:#12805c"></i>lance sugerido</span>
+        <span><i style="background:#13294b"></i>mediana</span>
+        <span><i style="background:#a8322a"></i>teto do edital</span>
+        <span><i style="background:#fff;border:2px solid #2c5288;border-radius:50%"></i>seu custo</span>
+        <span><i style="background:#1d6b4a"></i>lance sugerido</span>
       </div>
     </div>`;
   ligarAnalise();
@@ -771,6 +856,12 @@ function ligarAnalise() {
   const box = $("#analise"), ed = S.atual;
   $("#voltar").onclick = () => irPara("radar");
   $("#anSalvar").onclick = () => { alternarCarteira(ed); renderAnalise(); };
+  const refiltrar = () => { renderAnaliseMantendo(); const q = $("#itQ"); q.focus(); q.setSelectionRange(q.value.length, q.value.length); };
+  let tq;
+  $("#itQ").oninput = e => { S.itFiltro.q = e.target.value; clearTimeout(tq); tq = setTimeout(refiltrar, 250); };
+  $$("#itVer button").forEach(b => b.onclick = () => { S.itFiltro.ver = b.dataset.v; renderAnaliseMantendo(); });
+  $("#itOrd").onchange = e => { S.itFiltro.ord = e.target.value; renderAnaliseMantendo(); };
+  $("#verMaiores")?.addEventListener("click", () => { S.itFiltro.ord = "valor"; renderAnaliseMantendo(); $(".items").scrollIntoView({ behavior: "smooth" }); });
   $$(".params input", box).forEach(inp => inp.addEventListener("change", () => {
     S.cfg[inp.dataset.p] = parseFloat(inp.value) || 0;
     store.set("cfg", S.cfg);
@@ -854,7 +945,7 @@ function renderCarteira() {
   }
   box.innerHTML = `<div class="table-wrap"><table class="cart"><thead><tr><th>Edital</th><th>Local</th><th>Encerra</th><th>Valor</th><th>Status</th><th>Anotações</th><th></th></tr></thead><tbody>
     ${lista.map(c => `<tr data-id="${esc(c.id)}">
-      <td style="max-width:420px"><b>${esc((c.objeto || "").slice(0, 120))}</b><div class="small muted">${esc(c.orgao)}</div></td>
+      <td style="max-width:420px"><b>${esc(frase(c.objeto || "").slice(0, 120))}</b><div class="small muted">${esc(nomeProprio(c.orgao))}</div></td>
       <td>${esc(c.municipio)}/${esc(c.uf)}</td>
       <td>${dataHoraBR(c.encerramento)}<div>${prazoTag(c.encerramento)}</div></td>
       <td class="num">${c.valor ? brlCurto(c.valor) : "–"}</td>
@@ -896,20 +987,34 @@ function renderCasos() {
   if (!casos.length) { box.innerHTML = cab + `<div class="card empty"><h3>Nenhum estudo publicado ainda</h3></div>`; return; }
   box.innerHTML = cab + `<div class="casos">${casos.map((c, ci) => {
     const dec = c.decisao_classe;
+    const conta = d => c.itens.filter(i => i.decisao === d).length;
+    const vEntra = c.itens.filter(i => i.decisao === "ENTRAR").reduce((a, i) => a + (i.lance_sugerido || 0) * (i.qtd || 0), 0);
+    const fontes = c.itens.reduce((a, i) => a + i.cotacoes.length, 0);
     const linhas = c.itens.map(i => {
       const precos = i.cotacoes.filter(q => q.preco_unit > 0).map(q => q.preco_unit);
-      return `<tr><td class="num">${esc(i.n)}</td><td>${esc(i.descricao_curta)}<div class="small muted">${nfmt(i.qtd)} ${esc(i.unidade)} · ${i.cotacoes.length} fontes consultadas</div></td>
-        <td class="r num">${brl(i.teto)}</td><td class="r num">${i.melhor_custo_unit ? brl(i.melhor_custo_unit) : "–"}<div class="small muted">${esc((i.fonte_melhor || "").slice(0, 40))}</div></td>
+      const escala = Math.max(i.teto || 0, i.preco_minimo_viavel || 0, i.melhor_custo_unit || 0) * 1.05 || 1;
+      const barra = i.melhor_custo_unit && i.teto ? `<div class="ct" title="Barra: melhor custo · traço: teto do edital"><div class="c ${i.preco_minimo_viavel > i.teto ? "over" : ""}" style="width:${i.melhor_custo_unit / escala * 100}%"></div><div class="t" style="left:${i.teto / escala * 100}%"></div></div>` : "";
+      return `<tr><td class="num">${esc(i.n)}</td>
+        <td>${esc(i.descricao_curta)}<div class="small muted">${nfmt(i.qtd)} ${esc(i.unidade)} · ${plural(i.cotacoes.length, "fonte consultada", "fontes consultadas")}${precos.length > 1 ? ` · cotado de ${brl(Math.min(...precos))} a ${brl(Math.max(...precos))}` : ""}</div>
+          <details class="motivo"><summary>Por quê</summary><p>${esc(i.motivo)}</p></details></td>
+        <td class="r num">${brl(i.teto)}</td>
+        <td class="r num">${i.melhor_custo_unit ? brl(i.melhor_custo_unit) : "–"}${barra}</td>
         <td class="r num">${i.preco_minimo_viavel ? brl(i.preco_minimo_viavel) : "–"}</td>
-        <td><span class="verdict ${i.decisao === "ENTRAR" ? "v-go" : i.decisao === "AVALIAR" ? "v-tight" : "v-no"}">${DECISAO_ROTULO[i.decisao] || esc(i.decisao)}</span></td></tr>
-        <tr><td></td><td colspan="5" class="small muted" style="padding-top:0">${esc(i.motivo)}${precos.length > 1 ? ` · faixa cotada ${brl(Math.min(...precos))} a ${brl(Math.max(...precos))}` : ""}</td></tr>`;
+        <td><span class="verdict ${i.decisao === "ENTRAR" ? "v-go" : i.decisao === "AVALIAR" ? "v-tight" : "v-no"}">${DECISAO_ROTULO[i.decisao] || esc(i.decisao)}</span></td></tr>`;
     }).join("");
+    const riscos = c.riscos || [];
     return `<article class="card">
       <div class="caso-h">
         <div><span class="eyebrow">Caso ${ci + 1} · ${esc(c.edital.municipio)}/${esc(c.edital.uf)} · ${esc(c.edital.modalidade || "")}</span>
-          <h3>${esc(c.edital.objeto)}</h3>
-          <div class="small muted">${esc(c.edital.orgao)} · propostas até ${dataHoraBR(c.edital.encerramento)} · perfil: ${esc(c.persona.split(/[,:(]/)[0].slice(0, 80))}</div></div>
+          <h3>${esc(frase(c.edital.objeto))}</h3>
+          <div class="small muted">${esc(nomeProprio(c.edital.orgao))} · propostas até ${dataHoraBR(c.edital.encerramento)} · perfil: ${esc(c.persona.split(/[,:(]/)[0].slice(0, 80))}</div></div>
         <div class="decisao ${dec}">${esc(c.decisao_titulo)}</div>
+      </div>
+      <div class="caso-kpis">
+        <div><span>Itens analisados</span><b>${c.itens.length}</b></div>
+        <div><span>Entrar · avaliar · não</span><b>${conta("ENTRAR")} · ${conta("AVALIAR")} · ${conta("NAO ENTRAR")}</b></div>
+        <div><span>Receita dos itens “entrar”</span><b class="num">${vEntra ? brlCurto(vEntra) : "–"}</b></div>
+        <div><span>Cotações pesquisadas</span><b>${fontes}</b></div>
       </div>
       <div class="caso-b">
         <div>
@@ -917,11 +1022,12 @@ function renderCasos() {
           <div class="table-wrap"><table class="hist"><thead><tr><th>#</th><th>Item</th><th class="r">Teto</th><th class="r">Melhor custo</th><th class="r">Preço mínimo</th><th>Decisão</th></tr></thead><tbody>${linhas}</tbody></table></div>
         </div>
         <div>
-          <h4 class="eyebrow" style="margin:0 0 4px">Riscos e cuidados</h4>
-          <ul>${(c.riscos || []).slice(0, 5).map(r => `<li>${esc(r)}</li>`).join("")}</ul>
-          ${c.exigencias?.length ? `<h4 class="eyebrow" style="margin:0 0 4px">Exigências regulatórias</h4><ul>${c.exigencias.slice(0, 4).map(r => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}
           <h4 class="eyebrow" style="margin:0 0 4px">Lição</h4>
-          <p class="small" style="margin-top:4px">${esc(c.licao)}</p>
+          <p style="margin:4px 0 14px;font-family:var(--serif);font-size:15px;color:var(--navy)">${esc(c.licao)}</p>
+          <h4 class="eyebrow" style="margin:0 0 4px">Riscos e cuidados</h4>
+          <ul>${riscos.slice(0, 3).map(r => `<li>${esc(r)}</li>`).join("")}</ul>
+          ${riscos.length > 3 ? `<details class="motivo" style="margin:-6px 0 12px"><summary>Mais ${riscos.length - 3} cuidado(s)</summary><ul>${riscos.slice(3).map(r => `<li>${esc(r)}</li>`).join("")}</ul></details>` : ""}
+          ${c.exigencias?.length ? `<details class="motivo" style="margin-bottom:12px"><summary>Exigências regulatórias (${c.exigencias.length})</summary><ul>${c.exigencias.map(r => `<li>${esc(r)}</li>`).join("")}</ul></details>` : ""}
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <button class="btn sm primary" data-caso="${esc(c.edital_id)}">Abrir análise com cotações</button>
             <a class="btn sm" href="${esc(c.edital.url)}" target="_blank" rel="noopener">Edital no PNCP</a>
@@ -1128,8 +1234,8 @@ async function iniciar() {
   };
   $("#opps").addEventListener("click", e => {
     const a = e.target.closest("[data-analisar]"), s = e.target.closest("[data-salvar]");
-    if (a) abrirAnalise(a.dataset.analisar);
-    if (s) { const ed = acharEdital(s.dataset.salvar); alternarCarteira(ed); s.innerHTML = S.carteira[ed.id] ? ICON.starOn + " Salvo" : ICON.star + " Salvar"; }
+    if (a) { e.preventDefault(); abrirAnalise(a.dataset.analisar); }
+    if (s) { const ed = acharEdital(s.dataset.salvar); alternarCarteira(ed); s.innerHTML = S.carteira[ed.id] ? ICON.starOn : ICON.star; }
   });
   $("#cSave").onclick = salvarConfig;
   $("#cartCsv").onclick = exportarCsv;
@@ -1164,6 +1270,7 @@ async function iniciar() {
   const v = location.hash.slice(1);
   irPara(["radar", "casos", "fornecedores", "carteira", "guia", "config"].includes(v) ? v : "radar");
   buscar();
+  if (v.startsWith("edital=")) abrirAnalise(decodeURIComponent(v.slice(7)));
 }
 
 /* Na busca ao vivo, mudar filtros não precisa nova consulta: refiltra o que já veio. */
