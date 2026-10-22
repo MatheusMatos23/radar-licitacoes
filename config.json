@@ -1,0 +1,8 @@
+{
+  "ufs": ["SP"],
+  "paginas_por_uf": 30,
+  "max_editais": 1200,
+  "meses_historico": 12,
+  "threads": 8,
+  "threads_precos": 3
+}

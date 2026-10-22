@@ -1,0 +1,33 @@
+name: Coletar licitações
+
+on:
+  schedule:
+    - cron: "0 9,15,21 * * *"   # 06h, 12h e 18h (horário de Brasília)
+  workflow_dispatch:             # botão "Run workflow" na aba Actions
+
+permissions:
+  contents: write
+
+concurrency:
+  group: coleta
+  cancel-in-progress: false
+
+jobs:
+  coletar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Coletar editais e preços
+        run: python scripts/coletar.py
+      - name: Publicar dados
+        run: |
+          git config user.name "radar-bot"
+          git config user.email "radar-bot@users.noreply.github.com"
+          git add data/
+          git diff --cached --quiet && echo "Sem mudanças" && exit 0
+          git commit -m "Atualiza dados de licitações"
+          git push

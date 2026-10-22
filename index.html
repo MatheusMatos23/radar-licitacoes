@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Radar de Licitações</title>
+  <meta name="description" content="Painel de oportunidades em licitações públicas: editais abertos, histórico de preços do governo e análise de margem para revenda.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/style.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23163a6b'/%3E%3Ccircle cx='16' cy='16' r='9' fill='none' stroke='%23fff' stroke-width='2.5'/%3E%3Cpath d='M16 16 L22 10' stroke='%23c99a2e' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
+</head>
+<body>
+  <div class="gov-strip">
+    <div class="wrap">
+      <span>Dados abertos: <b>PNCP</b> · <b>Compras.gov.br</b></span>
+      <span id="metaInfo">Carregando base…</span>
+    </div>
+  </div>
+
+  <header class="top">
+    <div class="wrap">
+      <div class="brand">
+        <div class="brand-mark">
+          <svg viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="11" stroke="#163a6b" stroke-width="2.5"/><circle cx="16" cy="16" r="5" stroke="#163a6b" stroke-width="2" opacity=".5"/><path d="M16 16 L23.5 8.5" stroke="#c99a2e" stroke-width="3" stroke-linecap="round"/></svg>
+        </div>
+        <div>
+          <h1>Radar de Licitações</h1>
+          <p>Oportunidades · Preço de referência · Margem de revenda</p>
+        </div>
+      </div>
+      <nav class="tabs" id="tabs">
+        <button data-view="radar" class="active">Oportunidades</button>
+        <button data-view="analise">Análise do edital</button>
+        <button data-view="carteira">Minha carteira <span class="badge" id="cartCount">0</span></button>
+        <button data-view="guia">Guia MEI &amp; estratégia</button>
+        <button data-view="config">Configurações</button>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <div class="wrap">
+
+      <!-- ================= RADAR ================= -->
+      <section id="view-radar">
+        <div class="layout">
+          <aside class="card filters">
+            <div class="card-h"><h3>Filtros</h3><button class="btn sm ghost" id="fReset" style="margin-left:auto">Limpar</button></div>
+            <div class="card-b">
+              <div class="field">
+                <label>Fonte dos dados</label>
+                <div class="seg" id="fonte">
+                  <button data-v="base" class="active" title="Editais já coletados pelo robô, com itens e histórico de preço">Base do robô</button>
+                  <button data-v="live" title="Busca direta no PNCP, qualquer estado">Ao vivo (PNCP)</button>
+                </div>
+              </div>
+              <div class="field">
+                <label for="fQ">O que você quer fornecer?</label>
+                <input type="search" id="fQ" placeholder="ex.: cadeira, notebook, papel A4">
+                <div class="hint">Busca no objeto e nos itens do edital.</div>
+              </div>
+              <div class="row2">
+                <div class="field">
+                  <label for="fUf">Estado</label>
+                  <select id="fUf"></select>
+                </div>
+                <div class="field">
+                  <label for="fRaio">Raio</label>
+                  <select id="fRaio">
+                    <option value="0">Todo o estado</option>
+                    <option value="50">até 50 km</option>
+                    <option value="100">até 100 km</option>
+                    <option value="150" selected>até 150 km</option>
+                    <option value="250">até 250 km</option>
+                    <option value="400">até 400 km</option>
+                  </select>
+                </div>
+              </div>
+              <div class="field">
+                <label for="fBase">Sua cidade (base de entrega)</label>
+                <input type="text" id="fBase" list="cidades" placeholder="ex.: Paulínia">
+                <datalist id="cidades"></datalist>
+              </div>
+              <div class="field">
+                <label for="fPrazo">Prazo mínimo para preparar proposta</label>
+                <select id="fPrazo">
+                  <option value="0">Qualquer</option>
+                  <option value="2" selected>2 dias ou mais</option>
+                  <option value="5">5 dias ou mais</option>
+                  <option value="10">10 dias ou mais</option>
+                </select>
+              </div>
+              <label class="check"><input type="checkbox" id="fMe"> Com itens exclusivos ME/EPP</label>
+              <label class="check"><input type="checkbox" id="fHist"> Com histórico de preço</label>
+              <label class="check"><input type="checkbox" id="fPorte" checked> Dentro do limite do meu porte</label>
+              <label class="check"><input type="checkbox" id="fDisp" checked> Incluir dispensas</label>
+              <button class="btn primary block" id="fBuscar" style="margin-top:8px">Buscar oportunidades</button>
+            </div>
+          </aside>
+
+          <div>
+            <div class="kpis">
+              <div class="kpi"><div class="l">Oportunidades</div><div class="v num" id="kN">–</div><div class="s" id="kNs">&nbsp;</div></div>
+              <div class="kpi k2"><div class="l">Valor estimado</div><div class="v num" id="kV">–</div><div class="s">soma dos itens com valor</div></div>
+              <div class="kpi k3"><div class="l">Itens exclusivos ME/EPP</div><div class="v num" id="kMe">–</div><div class="s">reservados para pequenas</div></div>
+              <div class="kpi k4"><div class="l">Encerram em 7 dias</div><div class="v num" id="kU">–</div><div class="s">corra para propor</div></div>
+            </div>
+
+            <div class="toolbar">
+              <div class="status-line grow" id="status"></div>
+              <label class="small muted" for="fOrd">Ordenar por</label>
+              <select id="fOrd">
+                <option value="score">Atratividade</option>
+                <option value="prazo">Prazo mais próximo</option>
+                <option value="dist">Mais perto</option>
+                <option value="valor">Maior valor</option>
+                <option value="recente">Mais recente</option>
+              </select>
+            </div>
+            <div class="opps" id="opps"></div>
+            <div style="text-align:center;margin-top:14px"><button class="btn hidden" id="more">Mostrar mais</button></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= ANÁLISE ================= -->
+      <section id="view-analise" class="hidden">
+        <div id="analise"></div>
+      </section>
+
+      <!-- ================= CARTEIRA ================= -->
+      <section id="view-carteira" class="hidden">
+        <div class="section-title"><h2>Minha carteira</h2><span class="muted">Editais que você marcou para acompanhar (ficam salvos neste navegador).</span>
+          <button class="btn sm" id="cartCsv" style="margin-left:auto">Exportar CSV</button></div>
+        <div class="card" id="carteira"></div>
+      </section>
+
+      <!-- ================= GUIA ================= -->
+      <section id="view-guia" class="hidden"></section>
+
+      <!-- ================= CONFIG ================= -->
+      <section id="view-config" class="hidden">
+        <div class="section-title"><h2>Configurações</h2><span class="muted">Valores padrão usados nas análises. Ficam salvos neste navegador.</span></div>
+        <div class="guide">
+          <div class="card">
+            <div class="card-h"><h3>Sua empresa</h3></div>
+            <div class="card-b">
+              <div class="field"><label for="cPorte">Porte</label>
+                <select id="cPorte">
+                  <option value="MEI">MEI (limite R$ 81 mil/ano)</option>
+                  <option value="ME">ME – Microempresa (até R$ 360 mil/ano)</option>
+                  <option value="EPP">EPP – Pequeno porte (até R$ 4,8 mi/ano)</option>
+                  <option value="DEMAIS">Demais (sem limite)</option>
+                </select>
+                <div class="hint">Usado no filtro “dentro do limite do meu porte” e nos alertas.</div>
+              </div>
+              <div class="row2">
+                <div class="field"><label for="cUf">Estado padrão</label><select id="cUf"></select></div>
+                <div class="field"><label for="cBase">Cidade base</label><input type="text" id="cBase" list="cidades"></div>
+              </div>
+              <div class="field"><label for="cFat">Já faturado no ano (R$)</label><input type="number" id="cFat" min="0" step="1000">
+                <div class="hint">O painel avisa quando um edital estouraria o limite anual do porte.</div></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-h"><h3>Custos padrão da revenda</h3></div>
+            <div class="card-b">
+              <div class="row2">
+                <div class="field"><label for="cImp">Impostos sobre a venda (%)</label><input type="number" id="cImp" step="0.1" min="0">
+                  <div class="hint">Simples Nacional comércio (Anexo I): ~4% a 7,3%. MEI: 0% (paga DAS fixo).</div></div>
+                <div class="field"><label for="cFrete">Frete / entrega (% da venda)</label><input type="number" id="cFrete" step="0.1" min="0">
+                  <div class="hint">Ajuste por distância e volume.</div></div>
+              </div>
+              <div class="row2">
+                <div class="field"><label for="cOut">Outros custos (%)</label><input type="number" id="cOut" step="0.1" min="0">
+                  <div class="hint">Garantia, embalagem, taxas da plataforma, certidões.</div></div>
+                <div class="field"><label for="cMarg">Margem líquida mínima (%)</label><input type="number" id="cMarg" step="0.5" min="0">
+                  <div class="hint">Abaixo disso o painel recomenda não entrar.</div></div>
+              </div>
+              <div class="field"><label for="cDist">Frete extra por distância (% a cada 100 km)</label><input type="number" id="cDist" step="0.1" min="0">
+                <div class="hint">Somado ao frete base conforme a distância até o órgão.</div></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-h"><h3>Consulta de preços ao vivo (opcional)</h3></div>
+            <div class="card-b">
+              <p class="small muted" style="margin-top:0">O histórico de preços do Compras.gov.br não aceita chamadas diretas de sites. O robô (GitHub Actions) já traz os preços dos editais da base. Para consultar preços de editais buscados “ao vivo”, publique o proxy gratuito em <code>proxy/cloudflare-worker.js</code> e cole a URL aqui.</p>
+              <div class="field"><label for="cProxy">URL do proxy</label><input type="url" id="cProxy" placeholder="https://radar-proxy.seu-usuario.workers.dev/?url="></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-h"><h3>Dados salvos</h3></div>
+            <div class="card-b">
+              <p class="small muted" style="margin-top:0">Carteira, custos digitados e configurações ficam no armazenamento deste navegador.</p>
+              <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <button class="btn" id="bkExport">Baixar backup</button>
+                <label class="btn">Restaurar backup<input type="file" id="bkImport" accept="application/json" hidden></label>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style="margin-top:16px"><button class="btn primary" id="cSave">Salvar configurações</button></div>
+      </section>
+    </div>
+  </main>
+
+  <footer>Radar de Licitações · ferramenta de apoio à decisão. Confira sempre o edital, os anexos e o termo de referência antes de enviar proposta.</footer>
+  <div class="toast" id="toast"></div>
+
+  <script src="assets/app.js"></script>
+</body>
+</html>
